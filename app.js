@@ -1,5 +1,5 @@
 import { genericFoods } from './genericfoods.js';
-import { computeNutritionFromPer100g } from './math.js';
+import { computeConsistencyBadges, computeNutritionFromPer100g } from './math.js';
 import { lookupOpenFoodFacts } from './offclient.js';
 import { startBarcodeScanner, stopBarcodeScanner } from './scanner.js';
 import { drawWeeklyAnalyticsChart } from './analyticschart.js';
@@ -31,6 +31,10 @@ import {
   logMealTemplate,
   getMealTemplate,
   deleteMealTemplate,
+  getRecipes,
+  getRecipe,
+  upsertRecipe,
+  logRecipe,
   addWaterLog,
   addExerciseLog,
   getWaterTotalForPersonDate,
@@ -39,7 +43,10 @@ import {
   endActiveFast,
   getActiveFastForPerson,
   getLatestCompletedFastForPerson,
-  getCompletedFastStreakDays
+  getCompletedFastStreakDays,
+  getGoalPeriodsByPerson,
+  upsertGoalPeriod,
+  resolveGoalForPersonDate
 } from './storage.js';
 import {
   closePortionDialog,
@@ -76,7 +83,13 @@ import {
   renderMealTemplateItems,
   renderMealTemplateSearchResults,
   openMealTemplateDialog,
-  closeMealTemplateDialog
+  closeMealTemplateDialog,
+  renderRecipes,
+  renderRecipeItems,
+  renderRecipeSearchResults,
+  openRecipeDialog,
+  closeRecipeDialog,
+  renderGoalPeriods
 } from './ui.js';
 
 const CHATGPT_PHOTO_PROMPT = `Look at this meal photo. List the foods you can clearly identify.
@@ -184,11 +197,15 @@ const state = {
   dashboardLayoutByPerson: {},
   mealTemplates: [],
   mealTemplateDraft: { id: null, name: '', items: [] },
-  mealTemplatePickerOpen: false
+  mealTemplatePickerOpen: false,
+  recipes: [],
+  recipeDraft: { id: null, name: '', servingsDefault: 1, items: [] },
+  recipePickerOpen: false,
+  goalPeriodsByPerson: {}
 };
 
 
-const DASHBOARD_SECTION_KEYS = ['caloriesHero', 'macros', 'streak', 'habits', 'fasting', 'macroBreakdown'];
+const DASHBOARD_SECTION_KEYS = ['caloriesHero', 'macros', 'streak', 'consistencyBadges', 'habits', 'fasting', 'macroBreakdown'];
 
 function defaultDashboardLayout() {
   return {
@@ -197,6 +214,7 @@ function defaultDashboardLayout() {
       caloriesHero: false,
       macros: false,
       streak: false,
+      consistencyBadges: false,
       habits: false,
       fasting: false,
       macroBreakdown: false
@@ -232,6 +250,67 @@ async function loadDashboardLayoutForPerson(personId) {
   if (state.dashboardLayoutByPerson[personId]) return;
   const layout = await getDashboardLayout(personId);
   state.dashboardLayoutByPerson[personId] = normalizeDashboardLayout(layout);
+}
+
+async function loadGoalPeriodsForPerson(personId) {
+  if (!personId) return [];
+  const rows = await getGoalPeriodsByPerson(personId);
+  state.goalPeriodsByPerson[personId] = rows;
+  return rows;
+}
+
+function weekdayKeyFromIsoDate(isoDate) {
+  const d = new Date(`${isoDate}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return null;
+  const keys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  return keys[d.getDay()];
+}
+
+function emptyWeekdayGoals() {
+  const base = { kcal: '', protein: '', carbs: '', fat: '' };
+  return {
+    mon: { ...base },
+    tue: { ...base },
+    wed: { ...base },
+    thu: { ...base },
+    fri: { ...base },
+    sat: { ...base },
+    sun: { ...base }
+  };
+}
+
+async function handleSaveGoalPeriod(e) {
+  e.preventDefault();
+  const personId = state.selectedPersonId;
+  if (!personId) {
+    window.alert('Create/select a person first.');
+    return;
+  }
+
+  const name = (document.getElementById('goalPeriodName').value || '').trim();
+  const startDate = document.getElementById('goalPeriodStartDate').value;
+  const endDate = document.getElementById('goalPeriodEndDate').value;
+  if (!name || !startDate || !endDate) {
+    window.alert('Please provide name and date range.');
+    return;
+  }
+
+  const keys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const weekdayGoals = {};
+  keys.forEach((key) => {
+    const cap = key[0].toUpperCase() + key.slice(1);
+    weekdayGoals[key] = {
+      kcal: Number(document.getElementById(`goal${cap}Kcal`).value),
+      protein: Number(document.getElementById(`goal${cap}P`).value),
+      carbs: Number(document.getElementById(`goal${cap}C`).value),
+      fat: Number(document.getElementById(`goal${cap}F`).value)
+    };
+  });
+
+  await upsertGoalPeriod({ personId, name, startDate, endDate, weekdayGoals });
+  document.getElementById('goalPeriodForm').reset();
+  await loadAndRender();
+  showSettingsDataStatus('Goal period saved.');
 }
 
 
@@ -295,6 +374,26 @@ async function computeLoggingStreakDays(personId, selectedDate) {
     streak += 1;
   }
   return streak;
+}
+
+async function buildConsistencyStats(person, selectedDate, streakDays) {
+  if (!person?.id || !selectedDate) {
+    return { consistencyScore: 0, loggedDays: 0, proteinGoalMetDays: 0, badges: [] };
+  }
+
+  const days = [];
+  for (let i = 0; i < 7; i += 1) {
+    const date = addDays(selectedDate, -i);
+    const entries = await getEntriesForPersonDate(person.id, date);
+    const logged = entries.length > 0;
+    const resolved = await resolveGoalForPersonDate(person, date);
+    const pGoal = Number(resolved?.macroTargets?.p ?? person?.macroTargets?.p);
+    const proteinTotal = entries.reduce((sum, row) => sum + Number(row?.p || 0), 0);
+    const proteinGoalMet = logged && Number.isFinite(pGoal) && pGoal > 0 ? proteinTotal >= pGoal : false;
+    days.push({ logged, proteinGoalMet });
+  }
+
+  return computeConsistencyBadges({ days, streakDays });
 }
 
 async function buildWeeklyAnalyticsPoints(personId, endDate) {
@@ -522,20 +621,30 @@ async function loadAndRender() {
 
   state.mealTemplates = await getMealTemplates();
   renderMealTemplates(state.mealTemplates);
+  state.recipes = await getRecipes();
+  renderRecipes(state.recipes);
 
   const person = state.persons.find((p) => p.id === state.selectedPersonId);
   if (person) {
     await loadDashboardLayoutForPerson(person.id);
     renderDashboardCustomization(layoutForPerson(person.id));
     setDashboardCustomizeStatus('');
+    const goalPeriods = await loadGoalPeriodsForPerson(person.id);
+    renderGoalPeriods(goalPeriods, state.selectedDate);
+    const resolvedGoal = await resolveGoalForPersonDate(person, state.selectedDate);
+    const dashboardPerson = resolvedGoal
+      ? { ...person, kcalGoal: resolvedGoal.kcalGoal, macroTargets: resolvedGoal.macroTargets }
+      : person;
     const streakDays = await computeLoggingStreakDays(person.id, state.selectedDate);
+    const consistency = await buildConsistencyStats(person, state.selectedDate, streakDays);
     const waterMl = await getWaterTotalForPersonDate(person.id, state.selectedDate);
     const exerciseMinutes = await getExerciseTotalForPersonDate(person.id, state.selectedDate);
     const fasting = await loadFastingSummary(person.id);
-    renderDashboard(person, state.selectedDate, entriesByPerson[person.id] || [], {
+    renderDashboard(dashboardPerson, state.selectedDate, entriesByPerson[person.id] || [], {
       macroView: state.dashboardMacroView,
       layout: layoutForPerson(person.id),
       streakDays,
+      consistency,
       habits: {
         waterMl,
         exerciseMinutes,
@@ -549,6 +658,7 @@ async function loadAndRender() {
     filterSuggestions(document.getElementById('foodSearchInput').value || '', person.id);
   } else {
     renderDashboardCustomization(defaultDashboardLayout());
+    renderGoalPeriods([], state.selectedDate);
     setDashboardCustomizeStatus('Select a person to customize dashboard layout.');
     setDashboardDayExportStatus('');
     renderDashboardEmpty();
@@ -785,6 +895,53 @@ async function handleCustomFoodSubmit(e) {
 }
 
 
+async function handleQuickAddSubmit(e) {
+  e.preventDefault();
+  const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
+  if (!personId) {
+    window.alert('Create/select a person first.');
+    return;
+  }
+
+  const name = (document.getElementById('quickAddName').value || '').trim() || 'Quick add';
+  const payload = {
+    kcal: Number(document.getElementById('quickAddKcal').value || 0),
+    p: Number(document.getElementById('quickAddP').value || 0),
+    c: Number(document.getElementById('quickAddC').value || 0),
+    f: Number(document.getElementById('quickAddF').value || 0)
+  };
+
+  const values = Object.values(payload);
+  if (values.some((value) => !Number.isFinite(value) || value < 0)) {
+    window.alert('Please enter non-negative numeric values for calories and macros.');
+    return;
+  }
+
+  if (!values.some((value) => value > 0)) {
+    window.alert('Enter at least one value greater than zero.');
+    return;
+  }
+
+  const time = document.getElementById('addTime').value || nowTime();
+  await addEntry({
+    personId,
+    date: state.selectedDate,
+    time,
+    foodId: `quickadd:${Date.now()}`,
+    foodName: name,
+    amountGrams: 0,
+    kcal: payload.kcal,
+    p: payload.p,
+    c: payload.c,
+    f: payload.f,
+    source: 'quickAdd'
+  });
+
+  document.getElementById('quickAddForm').reset();
+  showAddStatus(`Logged quick add “${name}”.`);
+  await loadAndRender();
+}
+
 async function handleBarcodeDetected(barcode) {
   if (!barcode) return;
 
@@ -973,6 +1130,110 @@ function handlePhotoSelected(file) {
   reader.readAsDataURL(file);
 }
 
+
+function recipeItemFromSuggestion(item) {
+  return {
+    foodKey: item.foodId,
+    label: item.label,
+    per100g: {
+      kcal: Number(item.nutrition?.kcal100g || 0),
+      protein: Number(item.nutrition?.p100g || 0),
+      carbs: Number(item.nutrition?.c100g || 0),
+      fat: Number(item.nutrition?.f100g || 0)
+    },
+    grams: 100
+  };
+}
+
+function renderRecipeDraft() {
+  const picker = document.getElementById('recipePicker');
+  picker.hidden = !state.recipePickerOpen;
+  document.getElementById('recipeName').value = state.recipeDraft.name || '';
+  document.getElementById('recipeServingsDefault').value = String(state.recipeDraft.servingsDefault || 1);
+  renderRecipeItems(state.recipeDraft.items || []);
+  if (state.recipePickerOpen) {
+    const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
+    const pool = personId ? mealTemplateSuggestionPool(personId) : [];
+    const query = (document.getElementById('recipeSearchInput').value || '').trim().toLowerCase();
+    const filtered = query ? pool.filter((item) => item.label.toLowerCase().includes(query)) : pool;
+    renderRecipeSearchResults(filtered.slice(0, 30));
+  }
+}
+
+function resetRecipeDraft() {
+  state.recipeDraft = { id: null, name: '', servingsDefault: 1, items: [] };
+  state.recipePickerOpen = false;
+  const search = document.getElementById('recipeSearchInput');
+  if (search) search.value = '';
+}
+
+function openNewRecipeDialog() {
+  resetRecipeDraft();
+  openRecipeDialog();
+  renderRecipeDraft();
+}
+
+async function handleSaveRecipe(e) {
+  e.preventDefault();
+  const name = (document.getElementById('recipeName').value || '').trim();
+  const servingsDefault = Number(document.getElementById('recipeServingsDefault').value || 1);
+  if (!name) {
+    window.alert('Please provide a recipe name.');
+    return;
+  }
+  if (!Number.isFinite(servingsDefault) || servingsDefault <= 0) {
+    window.alert('Please provide a valid servings value.');
+    return;
+  }
+  if (!(state.recipeDraft.items || []).length) {
+    window.alert('Please add at least one ingredient.');
+    return;
+  }
+
+  const items = state.recipeDraft.items.map((item) => {
+    const grams = Number(item.grams);
+    return { ...item, grams: Number.isFinite(grams) && grams > 0 ? grams : 100 };
+  });
+
+  await upsertRecipe({
+    id: state.recipeDraft.id || undefined,
+    name,
+    servingsDefault,
+    items
+  });
+
+  closeRecipeDialog();
+  resetRecipeDraft();
+  showAddStatus(`Saved recipe “${name}”.`);
+  await loadAndRender();
+}
+
+async function handleLogRecipe(recipeId) {
+  const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
+  if (!personId) {
+    window.alert('Create/select a person first.');
+    return;
+  }
+  const recipe = await getRecipe(recipeId);
+  if (!recipe) {
+    window.alert('Recipe not found.');
+    return;
+  }
+  const suggested = Number(recipe.servingsDefault || 1);
+  const entered = window.prompt('Servings to log', String(suggested));
+  if (entered == null) return;
+  const servings = Number(entered);
+  if (!Number.isFinite(servings) || servings <= 0) {
+    window.alert('Please enter a valid positive servings value.');
+    return;
+  }
+
+  const date = state.selectedDate;
+  const time = document.getElementById('addTime').value || nowTime();
+  const entry = await logRecipe({ personId, date, time, recipeId, servings });
+  showAddStatus(`Logged recipe “${recipe.name}” (${servings} servings, ${Math.round(Number(entry.kcal || 0))} kcal).`);
+  await loadAndRender();
+}
 
 function mealItemFromSuggestion(item) {
   return {
@@ -1291,6 +1552,22 @@ function wireEvents() {
     }
   });
 
+  document.getElementById('recipesRow').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+
+    if (btn.dataset.action === 'new-recipe') {
+      openNewRecipeDialog();
+      return;
+    }
+
+    if (btn.dataset.action === 'log-recipe') {
+      const recipeId = btn.dataset.recipeId;
+      if (!recipeId) return;
+      await handleLogRecipe(recipeId);
+    }
+  });
+
   document.getElementById('mealTemplateAddItemBtn').addEventListener('click', () => {
     state.mealTemplatePickerOpen = !state.mealTemplatePickerOpen;
     renderMealTemplateDraft();
@@ -1339,9 +1616,62 @@ function wireEvents() {
     resetMealTemplateDraft();
   });
 
+  document.getElementById('recipeAddItemBtn').addEventListener('click', () => {
+    state.recipePickerOpen = !state.recipePickerOpen;
+    renderRecipeDraft();
+  });
+
+  document.getElementById('recipeSearchInput').addEventListener('input', () => {
+    renderRecipeDraft();
+  });
+
+  document.getElementById('recipeSearchResults').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action="select-recipe-item"]');
+    if (!btn) return;
+    const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
+    if (!personId) return;
+    const selected = mealTemplateSuggestionPool(personId).find((item) => item.foodId === btn.dataset.foodId);
+    if (!selected) return;
+    state.recipeDraft.items.push(recipeItemFromSuggestion(selected));
+    renderRecipeDraft();
+  });
+
+  document.getElementById('recipeItems').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action="remove-recipe-item"]');
+    if (!btn) return;
+    const index = Number(btn.dataset.index);
+    if (!Number.isFinite(index)) return;
+    state.recipeDraft.items.splice(index, 1);
+    renderRecipeDraft();
+  });
+
+  document.getElementById('recipeItems').addEventListener('input', (e) => {
+    const input = e.target.closest('input[data-action="recipe-item-grams"]');
+    if (!input) return;
+    const index = Number(input.dataset.index);
+    const grams = Number(input.value);
+    if (!Number.isFinite(index) || !state.recipeDraft.items[index]) return;
+    state.recipeDraft.items[index].grams = grams;
+  });
+
+  document.getElementById('recipeName').addEventListener('input', (e) => {
+    state.recipeDraft.name = e.target.value || '';
+  });
+
+  document.getElementById('recipeServingsDefault').addEventListener('input', (e) => {
+    state.recipeDraft.servingsDefault = Number(e.target.value) || 1;
+  });
+
+  document.getElementById('recipeForm').addEventListener('submit', handleSaveRecipe);
+  document.getElementById('cancelRecipeBtn').addEventListener('click', () => {
+    closeRecipeDialog();
+    resetRecipeDraft();
+  });
+
   document.getElementById('addSuggestions').addEventListener('click', handleAddSuggestionClick);
   document.getElementById('favoriteList').addEventListener('click', handleAddSuggestionClick);
   document.getElementById('recentList').addEventListener('click', handleAddSuggestionClick);
+  document.getElementById('quickAddForm').addEventListener('submit', handleQuickAddSubmit);
   document.getElementById('customFoodForm').addEventListener('submit', handleCustomFoodSubmit);
 
   document.getElementById('startScanBtn').addEventListener('click', async () => {
@@ -1382,6 +1712,7 @@ function wireEvents() {
   document.getElementById('personForm').addEventListener('submit', handlePersonSave);
   document.getElementById('cancelEditBtn').addEventListener('click', () => fillPersonForm(null));
   document.getElementById('settingsPersons').addEventListener('click', handleSettingsActions);
+  document.getElementById('goalPeriodForm').addEventListener('submit', handleSaveGoalPeriod);
   document.getElementById('dashboardCustomizeList').addEventListener('click', handleDashboardCustomizeActions);
   document.getElementById('dashboardCustomizeList').addEventListener('change', handleDashboardCustomizeActions);
 

@@ -349,7 +349,7 @@ function renderDashboardHabits(container, habits) {
 
 
 
-const DASHBOARD_SECTION_KEYS = ['caloriesHero', 'macros', 'streak', 'habits', 'fasting', 'macroBreakdown'];
+const DASHBOARD_SECTION_KEYS = ['caloriesHero', 'macros', 'streak', 'consistencyBadges', 'habits', 'fasting', 'macroBreakdown'];
 
 function normalizeDashboardLayout(layout) {
   const hiddenInput = layout && typeof layout.hidden === 'object' ? layout.hidden : {};
@@ -400,6 +400,19 @@ function renderDashboardSection(sectionKey, context) {
       <h3>Logging streak</h3>
       <p><strong>${context.streakDays} day${context.streakDays === 1 ? '' : 's'}</strong> in a row</p>
       <div class="macro-track"><div class="macro-fill" style="width:${Math.min(100, context.streakDays * 10)}%"></div></div>
+    </section>`;
+  }
+
+  if (sectionKey === 'consistencyBadges') {
+    const consistency = context.consistency || { consistencyScore: 0, badges: [] };
+    const badgeHtml = (consistency.badges || []).length
+      ? `<ul class="badge-list">${consistency.badges.map((badge) => `<li>${badge}</li>`).join('')}</ul>`
+      : '<p class="muted tiny">No badges earned yet.</p>';
+
+    return `<section class="consistency-card">
+      <h3>Consistency & Badges</h3>
+      <p><strong>${Math.round(Number(consistency.consistencyScore || 0))}%</strong> last 7 days</p>
+      ${badgeHtml}
     </section>`;
   }
 
@@ -501,7 +514,8 @@ export function renderDashboard(person, date, entries, options = {}) {
     remainingKcal,
     kcalProgress,
     macroView,
-    streakDays
+    streakDays,
+    consistency: options.consistency || { consistencyScore: 0, badges: [] }
   };
 
   const sectionsHtml = layout.order
@@ -600,6 +614,7 @@ export function renderDashboardCustomization(layout) {
     caloriesHero: 'Calories hero',
     macros: 'Macros section',
     streak: 'Logging streak',
+    consistencyBadges: 'Consistency & Badges',
     habits: 'Healthy Habits',
     fasting: 'Fasting',
     macroBreakdown: 'Macro Breakdown'
@@ -646,6 +661,48 @@ export function renderDashboardCustomization(layout) {
 
     actions.append(upBtn, downBtn);
     row.append(toggleLabel, actions);
+    wrap.appendChild(row);
+  });
+}
+
+export function renderGoalPeriods(periods = [], selectedDate = '') {
+  const wrap = el('goalPeriodsList');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  if (!periods.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted tiny';
+    empty.textContent = 'No goal periods yet.';
+    wrap.appendChild(empty);
+    return;
+  }
+
+  periods.forEach((period) => {
+    const row = document.createElement('article');
+    row.className = 'settings-person-row';
+
+    const left = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = String(period.name || 'Goal period');
+    const range = document.createElement('div');
+    range.className = 'muted tiny';
+    range.textContent = `${period.startDate} → ${period.endDate}`;
+
+    const d = new Date(`${selectedDate}T00:00:00`);
+    const keys = ['sun','mon','tue','wed','thu','fri','sat'];
+    const key = Number.isFinite(d.getTime()) ? keys[d.getDay()] : null;
+    const goal = key ? period.weekdayGoals?.[key] : null;
+    const detail = document.createElement('div');
+    detail.className = 'muted tiny';
+    if (goal && selectedDate >= period.startDate && selectedDate <= period.endDate) {
+      detail.textContent = `Active on ${selectedDate}: ${Math.round(Number(goal.kcal || 0))} kcal • P${Math.round(Number(goal.protein || 0))} C${Math.round(Number(goal.carbs || 0))} F${Math.round(Number(goal.fat || 0))}`;
+    } else {
+      detail.textContent = 'Not active for selected date';
+    }
+
+    left.append(title, range, detail);
+    row.appendChild(left);
     wrap.appendChild(row);
   });
 }
@@ -1020,6 +1077,146 @@ export function renderMealTemplateSearchResults(items = []) {
     btn.append(left, right);
     wrap.appendChild(btn);
   });
+}
+
+export function renderRecipes(recipes = []) {
+  const wrap = el('recipesRow');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const newBtn = document.createElement('button');
+  newBtn.type = 'button';
+  newBtn.className = 'secondary meal-template-card';
+  newBtn.dataset.action = 'new-recipe';
+  const title = document.createElement('strong');
+  title.textContent = '+ New Recipe';
+  const hint = document.createElement('span');
+  hint.className = 'muted tiny';
+  hint.textContent = 'Create a reusable recipe';
+  newBtn.append(title, hint);
+  wrap.appendChild(newBtn);
+
+  recipes.forEach((recipe) => {
+    const card = document.createElement('div');
+    card.className = 'meal-template-card-shell';
+
+    const logBtn = document.createElement('button');
+    logBtn.type = 'button';
+    logBtn.className = 'meal-template-card';
+    logBtn.dataset.action = 'log-recipe';
+    logBtn.dataset.recipeId = recipe.id;
+
+    const h = document.createElement('strong');
+    h.textContent = String(recipe.name || 'Unnamed recipe');
+    const meta = document.createElement('span');
+    meta.className = 'muted tiny';
+    const perServingKcal = Math.round(Number(recipe?.derived?.perServing?.kcal || 0));
+    const servings = Math.round(Number(recipe?.servingsDefault || 1) * 10) / 10;
+    meta.textContent = `${(recipe.items || []).length} items • ${perServingKcal} kcal/serving • ${servings} servings`;
+    logBtn.append(h, meta);
+
+    const stats = document.createElement('div');
+    stats.className = 'muted tiny';
+    const per100 = recipe?.derived?.per100g || {};
+    stats.textContent = `Per 100g: ${Math.round(Number(per100.kcal || 0))} kcal • P${Math.round(Number(per100.protein || 0))} C${Math.round(Number(per100.carbs || 0))} F${Math.round(Number(per100.fat || 0))}`;
+
+    card.append(logBtn, stats);
+    wrap.appendChild(card);
+  });
+}
+
+export function renderRecipeItems(items = []) {
+  const wrap = el('recipeItems');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'No ingredients yet. Click “Add ingredient”.';
+    wrap.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'meal-template-item-row';
+
+    const top = document.createElement('div');
+    top.className = 'meal-template-item-top';
+
+    const label = document.createElement('strong');
+    label.textContent = item.label;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'secondary';
+    removeBtn.dataset.action = 'remove-recipe-item';
+    removeBtn.dataset.index = String(index);
+    removeBtn.textContent = 'Remove';
+
+    top.append(label, removeBtn);
+
+    const gramsLabel = document.createElement('label');
+    gramsLabel.textContent = 'Ingredient grams';
+    const gramsInput = document.createElement('input');
+    gramsInput.type = 'number';
+    gramsInput.min = '1';
+    gramsInput.step = '1';
+    gramsInput.value = String(Math.round(Number(item.grams || 100)) || 100);
+    gramsInput.dataset.index = String(index);
+    gramsInput.dataset.action = 'recipe-item-grams';
+    gramsLabel.appendChild(gramsInput);
+
+    row.append(top, gramsLabel);
+    wrap.appendChild(row);
+  });
+}
+
+export function renderRecipeSearchResults(items = []) {
+  const wrap = el('recipeSearchResults');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'No matching foods found.';
+    wrap.appendChild(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'suggestion';
+    btn.dataset.action = 'select-recipe-item';
+    btn.dataset.foodId = item.foodId;
+
+    const left = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = item.label;
+    const sub = document.createElement('div');
+    sub.className = 'muted tiny';
+    sub.textContent = item.groupLabel || '';
+    left.append(strong, sub);
+
+    const right = document.createElement('span');
+    right.className = 'muted tiny';
+    const per100 = macroPer100FromAny(item.nutrition);
+    right.textContent = `${Math.round(Number(per100.kcal) || 0)} kcal/100g`;
+
+    btn.append(left, right);
+    wrap.appendChild(btn);
+  });
+}
+
+export function openRecipeDialog() {
+  el('recipeDialog').showModal();
+}
+
+export function closeRecipeDialog() {
+  el('recipeDialog').close();
 }
 
 export function openMealTemplateDialog() {
