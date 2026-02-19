@@ -2044,22 +2044,6 @@ function wireEvents() {
     state.route = route;
   });
 
-  document.getElementById('screen-add').addEventListener('click', (e) => {
-    const btn = e.target.closest('button[data-route-jump]');
-    if (!btn) return;
-    const route = btn.dataset.routeJump;
-    const tab = document.querySelector(`.tab[data-route="${route}"]`);
-    if (tab) {
-      tab.click();
-      return;
-    }
-    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', false));
-    document.querySelectorAll('.screen').forEach((screen) => {
-      screen.classList.toggle('active', screen.id === `screen-${route}`);
-    });
-    state.route = route;
-  });
-
   document.getElementById('startScanBtn').addEventListener('click', async () => {
     const video = document.getElementById('scannerVideo');
     try {

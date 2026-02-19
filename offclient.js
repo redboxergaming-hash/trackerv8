@@ -6,6 +6,27 @@ function parseNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeNutrientValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function convertUnitsToTarget(value, unit, targetUnit) {
+  const v = normalizeNutrientValue(value);
+  if (v === null) return null;
+  const from = String(unit || '').toLowerCase();
+  const to = String(targetUnit || '').toLowerCase();
+  if (!from || !to || from === to) return v;
+
+  if (from === 'g' && to === 'mg') return v * 1000;
+  if (from === 'mg' && to === 'g') return v / 1000;
+  if (from === 'mg' && to === 'ug') return v * 1000;
+  if (from === 'ug' && to === 'mg') return v / 1000;
+  if (from === 'g' && to === 'ug') return v * 1000000;
+  if (from === 'ug' && to === 'g') return v / 1000000;
+  return null;
+}
+
 function pickFirstNumber(obj, keys) {
   for (const key of keys) {
     const value = parseNumber(obj?.[key]);
@@ -15,15 +36,15 @@ function pickFirstNumber(obj, keys) {
 }
 
 function pickPer100gNumber(obj, key100g) {
-  return parseNumber(obj?.[key100g]);
+  return normalizeNutrientValue(obj?.[key100g]);
 }
 
 function sodiumMgPer100g(nutriments) {
   const sodiumG = pickFirstNumber(nutriments, ['sodium_100g', 'sodium']);
-  if (sodiumG !== null) return sodiumG * 1000;
+  if (sodiumG !== null) return convertUnitsToTarget(sodiumG, 'g', 'mg');
 
   const saltG = pickFirstNumber(nutriments, ['salt_100g', 'salt']);
-  if (saltG !== null) return saltG * 393;
+  if (saltG !== null) return normalizeNutrientValue(saltG * 393);
 
   return null;
 }
@@ -45,20 +66,54 @@ function normalizePer100g(product, barcodeFallback = '') {
     || product?.image_front_url
     || '';
 
-  const microsPer100g = {
-    saturatedFat100g: pickPer100gNumber(nutriments, 'saturated-fat_100g'),
-    monounsaturatedFat100g: pickPer100gNumber(nutriments, 'monounsaturated-fat_100g'),
-    polyunsaturatedFat100g: pickPer100gNumber(nutriments, 'polyunsaturated-fat_100g'),
-    omega3100g: pickPer100gNumber(nutriments, 'omega-3-fat_100g'),
-    omega6100g: pickPer100gNumber(nutriments, 'omega-6-fat_100g'),
-    transFat100g: pickPer100gNumber(nutriments, 'trans-fat_100g'),
-    fiber100g: pickFirstNumber(nutriments, ['fiber_100g', 'fiber']),
-    sugar100g: pickFirstNumber(nutriments, ['sugars_100g', 'sugars']),
-    sodiumMg100g: sodiumMgPer100g(nutriments),
-    potassiumMg100g: pickFirstNumber(nutriments, ['potassium_100g', 'potassium']),
-    calciumMg100g: pickFirstNumber(nutriments, ['calcium_100g', 'calcium']),
-    ironMg100g: pickFirstNumber(nutriments, ['iron_100g', 'iron']),
-    vitaminCMg100g: pickFirstNumber(nutriments, ['vitamin-c_100g', 'vitamin-c'])
+  const microsPer100g = {};
+  const fiber = pickFirstNumber(nutriments, ['fiber_100g', 'fiber']);
+  if (fiber !== null) microsPer100g.fiber_g = normalizeNutrientValue(fiber);
+  const sugar = pickFirstNumber(nutriments, ['sugars_100g', 'sugars']);
+  if (sugar !== null) microsPer100g.sugar_g = normalizeNutrientValue(sugar);
+  const sodium = sodiumMgPer100g(nutriments);
+  if (sodium !== null) microsPer100g.sodium_mg = normalizeNutrientValue(sodium);
+
+  const potassium = pickFirstNumber(nutriments, ['potassium_100g', 'potassium']);
+  const potassiumUnit = (product?.nutriments_units?.potassium || 'mg').toLowerCase();
+  const potassiumMg = convertUnitsToTarget(potassium, potassiumUnit, 'mg');
+  if (potassiumMg !== null) microsPer100g.potassium_mg = normalizeNutrientValue(potassiumMg);
+
+  const calcium = pickFirstNumber(nutriments, ['calcium_100g', 'calcium']);
+  const calciumUnit = (product?.nutriments_units?.calcium || 'mg').toLowerCase();
+  const calciumMg = convertUnitsToTarget(calcium, calciumUnit, 'mg');
+  if (calciumMg !== null) microsPer100g.calcium_mg = normalizeNutrientValue(calciumMg);
+
+  const magnesium = pickFirstNumber(nutriments, ['magnesium_100g', 'magnesium']);
+  const magnesiumUnit = (product?.nutriments_units?.magnesium || 'mg').toLowerCase();
+  const magnesiumMg = convertUnitsToTarget(magnesium, magnesiumUnit, 'mg');
+  if (magnesiumMg !== null) microsPer100g.magnesium_mg = normalizeNutrientValue(magnesiumMg);
+
+  const iron = pickFirstNumber(nutriments, ['iron_100g', 'iron']);
+  const ironUnit = (product?.nutriments_units?.iron || 'mg').toLowerCase();
+  const ironMg = convertUnitsToTarget(iron, ironUnit, 'mg');
+  if (ironMg !== null) microsPer100g.iron_mg = normalizeNutrientValue(ironMg);
+
+  const zinc = pickFirstNumber(nutriments, ['zinc_100g', 'zinc']);
+  const zincUnit = (product?.nutriments_units?.zinc || 'mg').toLowerCase();
+  const zincMg = convertUnitsToTarget(zinc, zincUnit, 'mg');
+  if (zincMg !== null) microsPer100g.zinc_mg = normalizeNutrientValue(zincMg);
+
+  const vitaminC = pickFirstNumber(nutriments, ['vitamin-c_100g', 'vitamin-c']);
+  const vitaminCUnit = (product?.nutriments_units?.['vitamin-c'] || 'mg').toLowerCase();
+  const vitaminCMg = convertUnitsToTarget(vitaminC, vitaminCUnit, 'mg');
+  if (vitaminCMg !== null) microsPer100g.vitamin_c_mg = normalizeNutrientValue(vitaminCMg);
+
+  const vitaminD = pickFirstNumber(nutriments, ['vitamin-d_100g', 'vitamin-d']);
+  const vitaminDUnit = (product?.nutriments_units?.['vitamin-d'] || '').toLowerCase();
+  const vitaminDUg = convertUnitsToTarget(vitaminD, vitaminDUnit, 'ug');
+  if (vitaminDUg !== null) microsPer100g.vitamin_d_ug = normalizeNutrientValue(vitaminDUg);
+
+  const per100g = {
+    kcal: kcalNormalized,
+    protein: pickFirstNumber(nutriments, ['proteins_100g', 'proteins']),
+    carbs: pickFirstNumber(nutriments, ['carbohydrates_100g', 'carbohydrates']),
+    fat: pickFirstNumber(nutriments, ['fat_100g', 'fat'])
   };
 
   return {
@@ -67,11 +122,12 @@ function normalizePer100g(product, barcodeFallback = '') {
     brands: product?.brands || '',
     imageUrl: product?.image_front_small_url || product?.image_front_url || '',
     imageThumbUrl,
+    per100g,
     nutrition: {
-      kcal100g: kcalNormalized,
-      p100g: pickFirstNumber(nutriments, ['proteins_100g', 'proteins']),
-      c100g: pickFirstNumber(nutriments, ['carbohydrates_100g', 'carbohydrates']),
-      f100g: pickFirstNumber(nutriments, ['fat_100g', 'fat']),
+      kcal100g: per100g.kcal,
+      p100g: per100g.protein,
+      c100g: per100g.carbs,
+      f100g: per100g.fat,
       ...microsPer100g
     },
     microsPer100g,
