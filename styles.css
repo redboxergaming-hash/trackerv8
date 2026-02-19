@@ -350,9 +350,9 @@ th, td {
 .add-card { display: grid; gap: var(--space-2); }
 .suggestions { display: grid; gap: var(--space-2); }
 .suggestion {
-  display: flex;
+  display: grid;
   width: 100%;
-  justify-content: space-between;
+  gap: var(--space-2);
   align-items: center;
   text-align: left;
   background: color-mix(in srgb, var(--surface-soft) 84%, transparent);
@@ -785,4 +785,102 @@ th, td {
   .goal-global-grid {
     grid-template-columns: 1fr;
   }
+}
+
+
+.suggestion {
+  grid-template-columns: auto 1fr auto;
+}
+
+.suggestion-body {
+  min-width: 0;
+}
+
+.food-thumb-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 44px;
+}
+
+.food-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.food-thumb-placeholder {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.scan-result-top {
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.scan-thumb-wrap {
+  width: 72px;
+  height: 72px;
+  flex-basis: 72px;
+}
+
+
+.search-source-toggle {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.search-source-toggle button.active {
+  background: var(--color-blue-100);
+  border-color: var(--color-blue-600);
+  color: var(--color-blue-600);
+}
+
+
+.custom-image-preview {
+  width: 96px;
+  height: 96px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+
+.custom-micro-details {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.custom-micro-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.custom-micro-grid {
+  margin-top: var(--space-2);
+}
+
+
+.custom-label-fallback-details {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.custom-label-fallback-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+#customFoodForm input[data-autofilled="1"] {
+  border-color: var(--color-blue-600);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-blue-600) 35%, transparent);
 }

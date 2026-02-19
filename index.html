@@ -98,11 +98,16 @@
               <div id="recentList" class="suggestions"></div>
             </section>
 
+            <div class="search-source-toggle" role="group" aria-label="Search source">
+              <button type="button" class="secondary active" data-search-source="local">Local</button>
+              <button type="button" class="secondary" data-search-source="public">Public (OFF)</button>
+            </div>
+
             <label>
               Search foods
               <input id="foodSearchInput" type="search" placeholder="Search favorites, recent, and built-in foods" />
             </label>
-
+            <p id="publicSearchStatus" class="muted tiny" hidden></p>
 
             <section>
               <h3>Generic categories</h3>
@@ -143,6 +148,38 @@
                 <label>C/100g <input id="customC" type="number" step="0.1" min="0" required /></label>
                 <label>F/100g <input id="customF" type="number" step="0.1" min="0" required /></label>
               </div>
+              <label>
+                Food image (optional)
+                <input id="customImageInput" type="file" accept="image/*" />
+              </label>
+              <img id="customImagePreview" class="custom-image-preview" alt="Custom food preview" hidden />
+              <div class="row-actions">
+                <button type="button" id="customLabelScanBtn" class="secondary">Scan nutrition label</button>
+                <input id="customLabelImageInput" type="file" accept="image/*" hidden />
+                <span id="customLabelAutoFillBadge" class="tiny muted" hidden>Auto-filled</span>
+              </div>
+              <p id="customLabelScanStatus" class="muted tiny" hidden></p>
+              <details class="custom-label-fallback-details">
+                <summary>Paste label text (fallback)</summary>
+                <label>Label text
+                  <textarea id="customLabelTextInput" rows="5" placeholder="Paste nutrition label text here"></textarea>
+                </label>
+                <div class="row-actions">
+                  <button type="button" id="parseLabelTextBtn" class="secondary">Parse text</button>
+                </div>
+              </details>
+              <details class="custom-micro-details">
+                <summary>Micronutrients (optional)</summary>
+                <div class="goal-global-grid custom-micro-grid">
+                  <label>Fiber (g/100g)<input id="customFiber" type="number" step="0.1" min="0" /></label>
+                  <label>Sugar (g/100g)<input id="customSugar" type="number" step="0.1" min="0" /></label>
+                  <label>Sodium (mg/100g)<input id="customSodium" type="number" step="0.1" min="0" /></label>
+                  <label>Potassium (mg/100g)<input id="customPotassium" type="number" step="0.1" min="0" /></label>
+                  <label>Calcium (mg/100g)<input id="customCalcium" type="number" step="0.1" min="0" /></label>
+                  <label>Iron (mg/100g)<input id="customIron" type="number" step="0.1" min="0" /></label>
+                  <label>Vitamin C (mg/100g)<input id="customVitaminC" type="number" step="0.1" min="0" /></label>
+                </div>
+              </details>
               <label>
                 Source label
                 <select id="customSource">

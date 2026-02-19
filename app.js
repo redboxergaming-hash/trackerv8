@@ -1,6 +1,7 @@
 import { genericFoods } from './genericfoods.js';
 import { computeConsistencyBadges, computeNutritionFromPer100g } from './math.js';
-import { lookupOpenFoodFacts } from './offclient.js';
+import { lookupOpenFoodFacts, searchOpenFoodFacts } from './offclient.js';
+import { parseLabelText, scanLabel } from './labelscan.js';
 import { startBarcodeScanner, stopBarcodeScanner } from './scanner.js';
 import { drawWeeklyAnalyticsChart } from './analyticschart.js';
 import {
@@ -64,6 +65,8 @@ import {
   renderDashboardCustomization,
   setDashboardDayExportStatus,
   renderSuggestions,
+  setPublicSearchStatus,
+  setSearchSourceToggle,
   renderFavoriteSection,
   renderRecentSection,
   renderScanResult,
@@ -127,7 +130,14 @@ const MICRONUTRIENTS = [
   { key: 'polyunsaturatedFat', per100Key: 'polyunsaturatedFat100g', label: 'Polyunsaturated fat', unit: 'g' },
   { key: 'omega3', per100Key: 'omega3100g', label: 'Omega-3', unit: 'g' },
   { key: 'omega6', per100Key: 'omega6100g', label: 'Omega-6', unit: 'g' },
-  { key: 'transFat', per100Key: 'transFat100g', label: 'Trans fat', unit: 'g' }
+  { key: 'transFat', per100Key: 'transFat100g', label: 'Trans fat', unit: 'g' },
+  { key: 'fiber', per100Key: 'fiber100g', label: 'Fiber', unit: 'g' },
+  { key: 'sugar', per100Key: 'sugar100g', label: 'Sugar', unit: 'g' },
+  { key: 'sodium', per100Key: 'sodiumMg100g', label: 'Sodium', unit: 'mg' },
+  { key: 'potassium', per100Key: 'potassiumMg100g', label: 'Potassium', unit: 'mg' },
+  { key: 'calcium', per100Key: 'calciumMg100g', label: 'Calcium', unit: 'mg' },
+  { key: 'iron', per100Key: 'ironMg100g', label: 'Iron', unit: 'mg' },
+  { key: 'vitaminC', per100Key: 'vitaminCMg100g', label: 'Vitamin C', unit: 'mg' }
 ];
 
 function scaleMicronutrientsFromPer100g(nutrition, grams) {
@@ -138,6 +148,100 @@ function scaleMicronutrientsFromPer100g(nutrition, grams) {
     out[item.key] = Number.isFinite(per100) ? Math.round(per100 * ratio * 1000) / 1000 : null;
   });
   return out;
+}
+
+function parseOptionalNonNegativeNumber(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function setCustomImagePreview(src) {
+  const img = document.getElementById('customImagePreview');
+  if (!img) return;
+  if (!src) {
+    img.hidden = true;
+    img.removeAttribute('src');
+    img.dataset.thumb = '';
+    return;
+  }
+  img.src = src;
+  img.dataset.thumb = src;
+  img.hidden = false;
+}
+
+function setCustomLabelScanStatus(message = '', visible = false) {
+  const el = document.getElementById('customLabelScanStatus');
+  if (!el) return;
+  el.hidden = !visible;
+  el.textContent = message;
+}
+
+function setCustomLabelAutoFillBadge(visible = false, text = 'Auto-filled') {
+  const badge = document.getElementById('customLabelAutoFillBadge');
+  if (!badge) return;
+  badge.hidden = !visible;
+  badge.textContent = text;
+}
+
+function markFieldAutofilled(inputId, value) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  if (value === null || value === undefined || value === '') return;
+  input.value = String(value);
+  input.dataset.autofilled = '1';
+}
+
+function applyLabelExtractedValues(extracted, sourceLabel = 'auto-filled') {
+  const macros = extracted?.macros || {};
+  const micros = extracted?.micros || {};
+
+  markFieldAutofilled('customKcal', macros.kcal100g);
+  markFieldAutofilled('customP', macros.p100g);
+  markFieldAutofilled('customC', macros.c100g);
+  markFieldAutofilled('customF', macros.f100g);
+  markFieldAutofilled('customSugar', micros.sugar_g);
+  markFieldAutofilled('customFiber', micros.fiber_g);
+  markFieldAutofilled('customSodium', micros.sodium_mg);
+
+  const autofilled = ['customKcal', 'customP', 'customC', 'customF', 'customSugar', 'customFiber', 'customSodium']
+    .map((id) => document.getElementById(id))
+    .filter((input) => input && input.dataset.autofilled === '1').length;
+
+  if (autofilled > 0) {
+    setCustomLabelAutoFillBadge(true, `${sourceLabel} (${autofilled} fields)`);
+  }
+}
+
+async function createImageThumbnailDataUrl(file, maxSize = 256) {
+  if (!file) return '';
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('Failed to read image'));
+    reader.readAsDataURL(file);
+  });
+
+  const image = await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Invalid image file'));
+    img.src = dataUrl;
+  });
+
+  const width = image.width || maxSize;
+  const height = image.height || maxSize;
+  const scale = Math.min(1, maxSize / Math.max(width, height));
+  const targetW = Math.max(1, Math.round(width * scale));
+  const targetH = Math.max(1, Math.round(height * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetW;
+  canvas.height = targetH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return dataUrl;
+  ctx.drawImage(image, 0, 0, targetW, targetH);
+  return canvas.toDataURL('image/jpeg', 0.82);
 }
 
 async function loadNutritionOverview() {
@@ -193,6 +297,12 @@ const state = {
   analyticsRange: '1W',
   analyticsPoints: [],
   selectedGenericCategory: 'All',
+  searchSource: 'local',
+  publicSuggestions: [],
+  publicSearchStatus: '',
+  publicSearchDebounceTimer: null,
+  publicSearchCache: new Map(),
+  publicSearchSeq: 0,
   dashboardMacroView: 'consumed',
   dashboardLayoutByPerson: {},
   mealTemplates: [],
@@ -370,6 +480,7 @@ function foodFromGeneric(item) {
     label: item.name,
     nutrition: { kcal100g: item.kcal100g, p100g: item.p100g, c100g: item.c100g, f100g: item.f100g },
     pieceGramHint: item.pieceGramHint,
+    imageThumbUrl: '',
     sourceType: 'generic',
     isGeneric: true,
     groupLabel: `Built-in generic • ${item.category || 'Uncategorized'}`
@@ -565,6 +676,35 @@ function buildSuggestionPool(personId, selectedCategory = "All") {
   return [...dedup.values()];
 }
 
+function normalizePublicSearchProduct(product) {
+  const barcode = String(product?.barcode || '').trim();
+  const idPart = barcode || String(product?.productName || 'item').toLowerCase().replace(/\s+/g, '_');
+  return {
+    foodId: `offsearch:${idPart}`,
+    barcode,
+    label: product?.brands ? `${product.productName} (${product.brands})` : product.productName,
+    nutrition: {
+      kcal100g: product?.nutrition?.kcal100g,
+      p100g: product?.nutrition?.p100g,
+      c100g: product?.nutrition?.c100g,
+      f100g: product?.nutrition?.f100g,
+      saturatedFat100g: product?.nutrition?.saturatedFat100g,
+      monounsaturatedFat100g: product?.nutrition?.monounsaturatedFat100g,
+      polyunsaturatedFat100g: product?.nutrition?.polyunsaturatedFat100g,
+      omega3100g: product?.nutrition?.omega3100g,
+      omega6100g: product?.nutrition?.omega6100g,
+      transFat100g: product?.nutrition?.transFat100g
+    },
+    imageThumbUrl: product?.imageThumbUrl || product?.imageUrl || '',
+    pieceGramHint: null,
+    sourceType: 'barcode',
+    isGeneric: false,
+    groupLabel: product?.brands ? `Open Food Facts • ${product.brands}` : 'Open Food Facts',
+    productName: product?.productName || 'Unknown product',
+    brands: product?.brands || ''
+  };
+}
+
 function filterSuggestions(query, personId) {
   const { favorites, recents } = sectionItems(personId);
   const pool = buildSuggestionPool(personId, state.selectedGenericCategory);
@@ -574,7 +714,62 @@ function filterSuggestions(query, personId) {
   const favoritesSet = new Set((state.favoritesByPerson[personId] || []).map((f) => f.foodId));
   renderFavoriteSection(favorites, favoritesSet);
   renderRecentSection(recents.slice(0, 20), favoritesSet);
+
+  if (state.searchSource === 'public') {
+    const emptyPublicText = state.publicSearchStatus || 'Search public database by name.';
+    renderSuggestions(state.publicSuggestions, favoritesSet, emptyPublicText);
+    setPublicSearchStatus(state.publicSearchStatus, Boolean(state.publicSearchStatus));
+    return;
+  }
+
   renderSuggestions(state.suggestions, favoritesSet);
+  setPublicSearchStatus('', false);
+}
+
+async function runPublicFoodSearch(rawQuery, personId) {
+  const query = String(rawQuery || '').trim();
+  state.publicSearchSeq += 1;
+  const seq = state.publicSearchSeq;
+
+  if (query.length < 2) {
+    state.publicSuggestions = [];
+    state.publicSearchStatus = 'Type at least 2 characters for public search.';
+    filterSuggestions(query, personId);
+    return;
+  }
+
+  if (!navigator.onLine) {
+    state.publicSuggestions = [];
+    state.publicSearchStatus = 'Offline – public search unavailable.';
+    filterSuggestions(query, personId);
+    return;
+  }
+
+  const cached = state.publicSearchCache.get(query.toLowerCase());
+  if (cached) {
+    state.publicSuggestions = cached;
+    state.publicSearchStatus = cached.length ? '' : 'No results.';
+    filterSuggestions(query, personId);
+    return;
+  }
+
+  state.publicSearchStatus = 'Searching…';
+  filterSuggestions(query, personId);
+
+  try {
+    const products = await searchOpenFoodFacts(query);
+    if (seq !== state.publicSearchSeq) return;
+    const normalized = products.map(normalizePublicSearchProduct).slice(0, 12);
+    state.publicSearchCache.set(query.toLowerCase(), normalized);
+    state.publicSuggestions = normalized;
+    state.publicSearchStatus = normalized.length ? '' : 'No results.';
+  } catch (error) {
+    if (seq !== state.publicSearchSeq) return;
+    state.publicSuggestions = [];
+    state.publicSearchStatus = 'Public search failed. Please try again.';
+  }
+
+  filterSuggestions(query, personId);
 }
 
 
@@ -683,6 +878,7 @@ async function loadAndRender() {
       fasting
     });
 
+    setSearchSourceToggle(state.searchSource);
     filterSuggestions(document.getElementById('foodSearchInput').value || '', person.id);
   } else {
     renderDashboardCustomization(defaultDashboardLayout());
@@ -816,6 +1012,19 @@ async function logActiveFood() {
   const macros = computeNutritionFromPer100g(active.nutrition, grams);
   const micronutrients = scaleMicronutrientsFromPer100g(active.nutrition, grams);
 
+  if ((active.sourceType === 'barcode') && active.barcode) {
+    await upsertCachedProduct({
+      barcode: active.barcode,
+      productName: active.productName || active.label,
+      brands: active.brands || '',
+      imageUrl: active.imageThumbUrl || '',
+      imageThumbUrl: active.imageThumbUrl || '',
+      nutrition: active.nutrition,
+      source: 'Open Food Facts',
+      fetchedAt: Date.now()
+    });
+  }
+
   const source =
     active.sourceType === 'favorite'
       ? 'Favorite'
@@ -843,6 +1052,7 @@ async function logActiveFood() {
       label: active.label,
       nutrition: active.nutrition,
       pieceGramHint: active.pieceGramHint,
+      imageThumbUrl: active.imageThumbUrl || '',
       sourceType: active.sourceType === 'favorite' ? 'generic' : active.sourceType
     }
   });
@@ -861,8 +1071,13 @@ async function handleAddSuggestionClick(e) {
   const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
   if (!foodId || !personId) return;
 
-  const item = buildSuggestionPool(personId, state.selectedGenericCategory).find((s) => s.foodId === foodId);
+  const sourcePool = state.searchSource === 'public' ? state.publicSuggestions : buildSuggestionPool(personId, state.selectedGenericCategory);
+  const item = sourcePool.find((s) => s.foodId === foodId);
   if (!item) return;
+
+  if (action === 'toggle-favorite' && state.searchSource === 'public') {
+    return;
+  }
 
   if (action === 'toggle-favorite') {
     const turnedOn = await toggleFavorite(personId, {
@@ -870,6 +1085,7 @@ async function handleAddSuggestionClick(e) {
       label: item.label,
       nutrition: item.nutrition,
       pieceGramHint: item.pieceGramHint,
+      imageThumbUrl: item.imageThumbUrl || '',
       sourceType: item.sourceType === 'favorite' ? 'generic' : item.sourceType
     });
     showAddStatus(turnedOn ? 'Added to favorites.' : 'Removed from favorites.');
@@ -900,22 +1116,44 @@ async function handleCustomFoodSubmit(e) {
     kcal100g: Number(document.getElementById('customKcal').value),
     p100g: Number(document.getElementById('customP').value),
     c100g: Number(document.getElementById('customC').value),
-    f100g: Number(document.getElementById('customF').value)
+    f100g: Number(document.getElementById('customF').value),
+    fiber100g: parseOptionalNonNegativeNumber(document.getElementById('customFiber').value),
+    sugar100g: parseOptionalNonNegativeNumber(document.getElementById('customSugar').value),
+    sodiumMg100g: parseOptionalNonNegativeNumber(document.getElementById('customSodium').value),
+    potassiumMg100g: parseOptionalNonNegativeNumber(document.getElementById('customPotassium').value),
+    calciumMg100g: parseOptionalNonNegativeNumber(document.getElementById('customCalcium').value),
+    ironMg100g: parseOptionalNonNegativeNumber(document.getElementById('customIron').value),
+    vitaminCMg100g: parseOptionalNonNegativeNumber(document.getElementById('customVitaminC').value)
   };
 
-  const hasInvalidNutrition = Object.values(nutrition).some((value) => !Number.isFinite(value) || value < 0);
-  if (hasInvalidNutrition) {
+  const hasInvalidMacros = ['kcal100g', 'p100g', 'c100g', 'f100g'].some((key) => {
+    const value = Number(nutrition[key]);
+    return !Number.isFinite(value) || value < 0;
+  });
+  if (hasInvalidMacros) {
     window.alert('Please enter non-negative numeric values for calories and macros.');
     return;
   }
 
+  const microInputs = ['customFiber', 'customSugar', 'customSodium', 'customPotassium', 'customCalcium', 'customIron', 'customVitaminC'];
+  const hasInvalidMicros = microInputs.some((id) => {
+    const raw = document.getElementById(id).value;
+    return raw !== '' && parseOptionalNonNegativeNumber(raw) === null;
+  });
+  if (hasInvalidMicros) {
+    window.alert('Micronutrients must be non-negative numeric values.');
+    return;
+  }
+
   const selectedSource = document.getElementById('customSource').value || 'custom';
+  const imageThumbUrl = document.getElementById('customImagePreview')?.dataset?.thumb || '';
 
   await openPortionForItem({
     foodId: `custom:${label.toLowerCase().replace(/\s+/g, '_')}`,
     label,
     nutrition,
     pieceGramHint: null,
+    imageThumbUrl,
     sourceType: selectedSource,
     isGeneric: false,
     groupLabel: selectedSource === 'photo-manual' ? 'Photo (manual via ChatGPT)' : 'Custom'
@@ -1012,12 +1250,13 @@ function toScannedFoodItem(product) {
     foodId: `barcode:${product.barcode}`,
     label: product.brands ? `${product.productName} (${product.brands})` : product.productName,
     nutrition: {
-      kcal100g: product.nutrition.kcal100g,
-      p100g: product.nutrition.p100g,
-      c100g: product.nutrition.c100g,
-      f100g: product.nutrition.f100g
+      ...product.nutrition
     },
     pieceGramHint: null,
+    imageThumbUrl: product.imageThumbUrl || product.imageUrl || '',
+    barcode: product.barcode,
+    productName: product.productName,
+    brands: product.brands || '',
     sourceType: 'barcode',
     isGeneric: false,
     groupLabel: 'Barcode (Open Food Facts)'
@@ -1530,6 +1769,22 @@ function wireEvents() {
     await loadAndRender();
   });
 
+  document.getElementById('screen-add').addEventListener('click', (e) => {
+    const searchBtn = e.target.closest('button[data-search-source]');
+    if (!searchBtn) return;
+    state.searchSource = searchBtn.dataset.searchSource === 'public' ? 'public' : 'local';
+    setSearchSourceToggle(state.searchSource);
+
+    const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
+    if (!personId) return;
+    const query = document.getElementById('foodSearchInput').value || '';
+    if (state.searchSource === 'public') {
+      runPublicFoodSearch(query, personId);
+    } else {
+      filterSuggestions(query, personId);
+    }
+  });
+
   document.getElementById('genericCategoryFilters').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-category]');
     if (!btn) return;
@@ -1545,7 +1800,17 @@ function wireEvents() {
   document.getElementById('foodSearchInput').addEventListener('input', (e) => {
     const personId = document.getElementById('addPersonPicker').value || state.selectedPersonId;
     if (!personId) return;
-    filterSuggestions(e.target.value, personId);
+    const query = e.target.value || '';
+
+    if (state.searchSource === 'public') {
+      if (state.publicSearchDebounceTimer) clearTimeout(state.publicSearchDebounceTimer);
+      state.publicSearchDebounceTimer = setTimeout(() => {
+        runPublicFoodSearch(query, personId);
+      }, 300);
+      return;
+    }
+
+    filterSuggestions(query, personId);
   });
 
   document.getElementById('mealTemplatesRow').addEventListener('click', async (e) => {
@@ -1701,6 +1966,83 @@ function wireEvents() {
   document.getElementById('recentList').addEventListener('click', handleAddSuggestionClick);
   document.getElementById('quickAddForm').addEventListener('submit', handleQuickAddSubmit);
   document.getElementById('customFoodForm').addEventListener('submit', handleCustomFoodSubmit);
+  document.getElementById('customImageInput').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      setCustomImagePreview('');
+      return;
+    }
+    try {
+      const thumb = await createImageThumbnailDataUrl(file, 256);
+      setCustomImagePreview(thumb);
+    } catch (error) {
+      console.error(error);
+      window.alert('Could not process image. Please try another file.');
+      setCustomImagePreview('');
+      e.target.value = '';
+    }
+  });
+
+  document.getElementById('customLabelScanBtn').addEventListener('click', () => {
+    document.getElementById('customLabelImageInput').click();
+  });
+
+  document.getElementById('customLabelImageInput').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setCustomLabelScanStatus('Reading label…', true);
+    setCustomLabelAutoFillBadge(false);
+    try {
+      const extracted = await scanLabel(file, { attemptOcr: true });
+      applyLabelExtractedValues(extracted, extracted.mode === 'ocr' ? 'Auto-filled (OCR)' : 'Auto-filled');
+      if (extracted.warnings?.length) {
+        setCustomLabelScanStatus(extracted.warnings.join(' '), true);
+      } else {
+        setCustomLabelScanStatus('Label read complete. Please review values.', true);
+      }
+    } catch (error) {
+      console.error(error);
+      setCustomLabelScanStatus('Could not read label. Use paste-text fallback below.', true);
+    }
+  });
+
+  document.getElementById('parseLabelTextBtn').addEventListener('click', () => {
+    const raw = document.getElementById('customLabelTextInput').value || '';
+    if (!raw.trim()) {
+      setCustomLabelScanStatus('Paste label text first.', true);
+      return;
+    }
+    const parsed = parseLabelText(raw);
+    applyLabelExtractedValues(parsed, 'Auto-filled (Text parse)');
+    if (parsed.warnings?.length) {
+      setCustomLabelScanStatus(parsed.warnings.join(' '), true);
+    } else {
+      setCustomLabelScanStatus('Parsed label text. Please verify values.', true);
+    }
+  });
+
+  document.getElementById('customFoodForm').addEventListener('reset', () => {
+    setCustomImagePreview('');
+    setCustomLabelAutoFillBadge(false);
+    setCustomLabelScanStatus('', false);
+  });
+
+  document.getElementById('screen-add').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-route-jump]');
+    if (!btn) return;
+    const route = btn.dataset.routeJump;
+    const tab = document.querySelector(`.tab[data-route="${route}"]`);
+    if (tab) {
+      tab.click();
+      return;
+    }
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', false));
+    document.querySelectorAll('.screen').forEach((screen) => {
+      screen.classList.toggle('active', screen.id === `screen-${route}`);
+    });
+    state.route = route;
+  });
 
   document.getElementById('screen-add').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-route-jump]');

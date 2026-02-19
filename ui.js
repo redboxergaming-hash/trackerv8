@@ -23,6 +23,38 @@ export function initRoutes(onRouteChange) {
   });
 }
 
+
+function createFoodThumb(imageUrl, label, fallbackIcon = '🍽️') {
+  const wrap = document.createElement('div');
+  wrap.className = 'food-thumb-wrap';
+
+  const fallback = document.createElement('span');
+  fallback.className = 'food-thumb-placeholder';
+  fallback.textContent = fallbackIcon;
+  wrap.appendChild(fallback);
+
+  if (imageUrl) {
+    const img = document.createElement('img');
+    img.className = 'food-thumb';
+    img.alt = `${label} thumbnail`;
+    img.width = 44;
+    img.height = 44;
+    img.loading = 'lazy';
+    img.referrerPolicy = 'no-referrer';
+    img.src = String(imageUrl);
+    img.onerror = () => {
+      img.remove();
+      fallback.hidden = false;
+    };
+    img.onload = () => {
+      fallback.hidden = true;
+    };
+    wrap.appendChild(img);
+  }
+
+  return wrap;
+}
+
 function sumEntries(entries) {
   return entries.reduce(
     (acc, item) => {
@@ -747,21 +779,62 @@ function renderFoodList(containerId, items, favoritesSet, emptyText) {
     return;
   }
 
-  wrap.innerHTML = items
-    .map((item) => {
-      const star = favoritesSet.has(item.foodId) ? '★' : '☆';
-      return `<button class="suggestion" data-action="pick-food" data-food-id="${item.foodId}">
-        <div>
-          <strong>${item.label}</strong>
-          <div class="muted tiny">${item.groupLabel}</div>
-          ${item.isGeneric ? '<div class="muted tiny">Generic built-in (approx.)</div>' : ''}
-        </div>
-        <div class="suggestion-actions">
-          <span class="star" data-action="toggle-favorite" data-food-id="${item.foodId}" role="button" aria-label="Toggle favorite">${star}</span>
-        </div>
-      </button>`;
-    })
-    .join('');
+  wrap.innerHTML = '';
+  items.forEach((item) => {
+    const star = favoritesSet.has(item.foodId) ? '★' : '☆';
+
+    const btn = document.createElement('button');
+    btn.className = 'suggestion';
+    btn.dataset.action = 'pick-food';
+    btn.dataset.foodId = item.foodId;
+
+    btn.appendChild(createFoodThumb(item.imageThumbUrl, item.label, item.isGeneric ? '🥣' : '🍽️'));
+
+    const info = document.createElement('div');
+    info.className = 'suggestion-body';
+
+    const title = document.createElement('strong');
+    title.textContent = item.label;
+
+    const group = document.createElement('div');
+    group.className = 'muted tiny';
+    group.textContent = item.groupLabel;
+
+    info.append(title, group);
+
+    const kcal = Number(item?.nutrition?.kcal100g);
+    const p = Number(item?.nutrition?.p100g);
+    const c = Number(item?.nutrition?.c100g);
+    const f = Number(item?.nutrition?.f100g);
+    if ([kcal, p, c, f].some((v) => Number.isFinite(v))) {
+      const macroLine = document.createElement('div');
+      macroLine.className = 'muted tiny';
+      macroLine.textContent = `Per 100g • kcal ${Number.isFinite(kcal) ? Math.round(kcal * 10) / 10 : '—'} • P ${Number.isFinite(p) ? Math.round(p * 10) / 10 : '—'} • C ${Number.isFinite(c) ? Math.round(c * 10) / 10 : '—'} • F ${Number.isFinite(f) ? Math.round(f * 10) / 10 : '—'}`;
+      info.appendChild(macroLine);
+    }
+
+    if (item.isGeneric) {
+      const genericNote = document.createElement('div');
+      genericNote.className = 'muted tiny';
+      genericNote.textContent = 'Generic built-in (approx.)';
+      info.appendChild(genericNote);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'suggestion-actions';
+
+    const fav = document.createElement('span');
+    fav.className = 'star';
+    fav.dataset.action = 'toggle-favorite';
+    fav.dataset.foodId = item.foodId;
+    fav.setAttribute('role', 'button');
+    fav.setAttribute('aria-label', 'Toggle favorite');
+    fav.textContent = star;
+
+    actions.appendChild(fav);
+    btn.append(info, actions);
+    wrap.appendChild(btn);
+  });
 }
 
 export function renderFavoriteSection(items, favoritesSet) {
@@ -772,8 +845,21 @@ export function renderRecentSection(items, favoritesSet) {
   renderFoodList('recentList', items, favoritesSet, 'No recent items yet.');
 }
 
-export function renderSuggestions(items, favoritesSet) {
-  renderFoodList('addSuggestions', items, favoritesSet, 'No matches. Use quick custom add below.');
+export function renderSuggestions(items, favoritesSet, emptyText = 'No matches. Use quick custom add below.') {
+  renderFoodList('addSuggestions', items, favoritesSet, emptyText);
+}
+
+export function setPublicSearchStatus(message = '', visible = false) {
+  const status = el('publicSearchStatus');
+  if (!status) return;
+  status.hidden = !visible;
+  status.textContent = message;
+}
+
+export function setSearchSourceToggle(source = 'local') {
+  document.querySelectorAll('#screen-add button[data-search-source]').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.searchSource === source);
+  });
 }
 
 export function renderPortionPicker(item, options) {
@@ -879,6 +965,20 @@ export function renderAnalyticsInsights(metrics) {
   `;
 }
 
+
+function scanMicrosSummary(nutrition = {}) {
+  const rows = [
+    ['Fiber', nutrition.fiber100g, 'g'],
+    ['Sugar', nutrition.sugar100g, 'g'],
+    ['Sodium', nutrition.sodiumMg100g, 'mg']
+  ].filter(([, value]) => Number.isFinite(Number(value)));
+
+  if (!rows.length) return 'Micros unavailable';
+  return rows
+    .map(([label, value, unit]) => `${label}: ${Math.round(Number(value) * 10) / 10}${unit}`)
+    .join(' • ');
+}
+
 function macroValue(value) {
   return value == null ? 'missing' : `${Math.round(value * 10) / 10}`;
 }
@@ -890,20 +990,55 @@ export function renderScanResult(product) {
     return;
   }
 
-  wrap.innerHTML = `<article class="card">
-    <div class="row-actions" style="justify-content:space-between;align-items:flex-start;">
-      <div>
-        <strong>${product.productName}</strong><br />
-        <span class="muted">${product.brands || 'Unknown brand'}</span><br />
-        <span class="muted tiny">Barcode: ${product.barcode}</span>
-      </div>
-      ${product.imageUrl ? `<img src="${product.imageUrl}" alt="${product.productName}" width="72" height="72" style="border-radius:8px;object-fit:cover;" />` : ''}
-    </div>
-    <p class="muted">Per 100g — kcal: ${macroValue(product.nutrition.kcal100g)}, P: ${macroValue(product.nutrition.p100g)}, C: ${macroValue(product.nutrition.c100g)}, F: ${macroValue(product.nutrition.f100g)}</p>
-    <div class="row-actions">
-      <button type="button" id="logScannedProductBtn">Log via portion picker</button>
-    </div>
-  </article>`;
+  wrap.innerHTML = '';
+
+  const article = document.createElement('article');
+  article.className = 'card';
+
+  const top = document.createElement('div');
+  top.className = 'row-actions scan-result-top';
+
+  const left = document.createElement('div');
+  const title = document.createElement('strong');
+  title.textContent = product.productName;
+  left.appendChild(title);
+  left.appendChild(document.createElement('br'));
+
+  const brand = document.createElement('span');
+  brand.className = 'muted';
+  brand.textContent = product.brands || 'Unknown brand';
+  left.appendChild(brand);
+  left.appendChild(document.createElement('br'));
+
+  const barcode = document.createElement('span');
+  barcode.className = 'muted tiny';
+  barcode.textContent = `Barcode: ${product.barcode}`;
+  left.appendChild(barcode);
+
+  const thumb = createFoodThumb(product.imageThumbUrl || product.imageUrl, product.productName, '📦');
+  thumb.classList.add('scan-thumb-wrap');
+
+  top.append(left, thumb);
+
+  const meta = document.createElement('p');
+  meta.className = 'muted';
+  meta.textContent = `Per 100g — kcal: ${macroValue(product.nutrition.kcal100g)}, P: ${macroValue(product.nutrition.p100g)}, C: ${macroValue(product.nutrition.c100g)}, F: ${macroValue(product.nutrition.f100g)}`;
+
+  const micros = document.createElement('p');
+  micros.className = 'muted tiny';
+  micros.textContent = `Micros per 100g — ${scanMicrosSummary(product.nutrition || {})}`;
+
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+
+  const logBtn = document.createElement('button');
+  logBtn.type = 'button';
+  logBtn.id = 'logScannedProductBtn';
+  logBtn.textContent = 'Log via portion picker';
+  actions.appendChild(logBtn);
+
+  article.append(top, meta, micros, actions);
+  wrap.appendChild(article);
 }
 
 function macroPer100FromAny(nutrition = {}) {

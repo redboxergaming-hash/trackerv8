@@ -160,6 +160,7 @@ function upsertRecentInTx(tx, payload) {
       label: payload.label,
       nutrition: payload.nutrition,
       pieceGramHint: payload.pieceGramHint ?? null,
+      imageThumbUrl: payload.imageThumbUrl || null,
       sourceType: payload.sourceType,
       usedAt: Date.now()
     });
@@ -505,6 +506,7 @@ export async function addEntry(entry) {
       label: cleaned.recentItem.label,
       nutrition: cleaned.recentItem.nutrition,
       pieceGramHint: cleaned.recentItem.pieceGramHint,
+      imageThumbUrl: cleaned.recentItem.imageThumbUrl || null,
       sourceType: cleaned.recentItem.sourceType
     });
   }
@@ -1024,6 +1026,7 @@ export async function toggleFavorite(personId, favoriteItem) {
       nutrition: favoriteItem.nutrition,
       sourceType: favoriteItem.sourceType,
       pieceGramHint: favoriteItem.pieceGramHint ?? null,
+      imageThumbUrl: favoriteItem.imageThumbUrl || null,
       createdAt: Date.now()
     });
   }
