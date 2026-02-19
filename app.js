@@ -296,19 +296,47 @@ async function handleSaveGoalPeriod(e) {
   }
 
   const keys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const parseGoalNumber = (value) => {
+    if (value === '' || value === null || value === undefined) return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const advancedOpen = Boolean(document.getElementById('goalAdvancedSchedule')?.open);
+  const globalDaily = {
+    kcal: parseGoalNumber(document.getElementById('goalDailyKcal')?.value),
+    protein: parseGoalNumber(document.getElementById('goalDailyP')?.value),
+    carbs: parseGoalNumber(document.getElementById('goalDailyC')?.value),
+    fat: parseGoalNumber(document.getElementById('goalDailyF')?.value)
+  };
+
   const weekdayGoals = {};
   keys.forEach((key) => {
     const cap = key[0].toUpperCase() + key.slice(1);
+    if (!advancedOpen) {
+      weekdayGoals[key] = { ...globalDaily };
+      return;
+    }
+
+    const dayGoals = {
+      kcal: parseGoalNumber(document.getElementById(`goal${cap}Kcal`).value),
+      protein: parseGoalNumber(document.getElementById(`goal${cap}P`).value),
+      carbs: parseGoalNumber(document.getElementById(`goal${cap}C`).value),
+      fat: parseGoalNumber(document.getElementById(`goal${cap}F`).value)
+    };
+
     weekdayGoals[key] = {
-      kcal: Number(document.getElementById(`goal${cap}Kcal`).value),
-      protein: Number(document.getElementById(`goal${cap}P`).value),
-      carbs: Number(document.getElementById(`goal${cap}C`).value),
-      fat: Number(document.getElementById(`goal${cap}F`).value)
+      kcal: dayGoals.kcal ?? globalDaily.kcal,
+      protein: dayGoals.protein ?? globalDaily.protein,
+      carbs: dayGoals.carbs ?? globalDaily.carbs,
+      fat: dayGoals.fat ?? globalDaily.fat
     };
   });
 
   await upsertGoalPeriod({ personId, name, startDate, endDate, weekdayGoals });
   document.getElementById('goalPeriodForm').reset();
+  const advanced = document.getElementById('goalAdvancedSchedule');
+  if (advanced) advanced.open = false;
   await loadAndRender();
   showSettingsDataStatus('Goal period saved.');
 }
@@ -1673,6 +1701,22 @@ function wireEvents() {
   document.getElementById('recentList').addEventListener('click', handleAddSuggestionClick);
   document.getElementById('quickAddForm').addEventListener('submit', handleQuickAddSubmit);
   document.getElementById('customFoodForm').addEventListener('submit', handleCustomFoodSubmit);
+
+  document.getElementById('screen-add').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-route-jump]');
+    if (!btn) return;
+    const route = btn.dataset.routeJump;
+    const tab = document.querySelector(`.tab[data-route="${route}"]`);
+    if (tab) {
+      tab.click();
+      return;
+    }
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', false));
+    document.querySelectorAll('.screen').forEach((screen) => {
+      screen.classList.toggle('active', screen.id === `screen-${route}`);
+    });
+    state.route = route;
+  });
 
   document.getElementById('startScanBtn').addEventListener('click', async () => {
     const video = document.getElementById('scannerVideo');

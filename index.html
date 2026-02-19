@@ -28,10 +28,7 @@
         <button data-route="persons" class="tab active">Persons</button>
         <button data-route="dashboard" class="tab">Dashboard</button>
         <button data-route="add" class="tab">Add Entry</button>
-        <button data-route="scan" class="tab">Scan</button>
-        <button data-route="photo" class="tab">Photo</button>
         <button data-route="analytics" class="tab">Analytics</button>
-        <button data-route="nutrition" class="tab">Nutrition</button>
         <button data-route="settings" class="tab">Settings</button>
       </nav>
 
@@ -61,6 +58,15 @@
         <section id="screen-add" class="screen" aria-labelledby="addTitle">
           <h2 id="addTitle">Manual Add</h2>
           <div class="card add-card">
+            <section class="quick-tools">
+              <h3>Quick tools</h3>
+              <div class="row-actions">
+                <button type="button" class="secondary" data-route-jump="scan">Scan barcode</button>
+                <button type="button" class="secondary" data-route-jump="photo">Photo workflow</button>
+                <button type="button" class="secondary" data-route-jump="nutrition">Nutrition overview</button>
+              </div>
+            </section>
+
             <div class="inline-controls">
               <label>
                 Person
@@ -293,15 +299,25 @@
                 <label>Start <input id="goalPeriodStartDate" type="date" required /></label>
                 <label>End <input id="goalPeriodEndDate" type="date" required /></label>
               </div>
-              <div class="goal-weekday-grid">
-                <label>Mon kcal<input id="goalMonKcal" type="number" min="0" step="1" /></label><label>Mon P<input id="goalMonP" type="number" min="0" step="1" /></label><label>Mon C<input id="goalMonC" type="number" min="0" step="1" /></label><label>Mon F<input id="goalMonF" type="number" min="0" step="1" /></label>
-                <label>Tue kcal<input id="goalTueKcal" type="number" min="0" step="1" /></label><label>Tue P<input id="goalTueP" type="number" min="0" step="1" /></label><label>Tue C<input id="goalTueC" type="number" min="0" step="1" /></label><label>Tue F<input id="goalTueF" type="number" min="0" step="1" /></label>
-                <label>Wed kcal<input id="goalWedKcal" type="number" min="0" step="1" /></label><label>Wed P<input id="goalWedP" type="number" min="0" step="1" /></label><label>Wed C<input id="goalWedC" type="number" min="0" step="1" /></label><label>Wed F<input id="goalWedF" type="number" min="0" step="1" /></label>
-                <label>Thu kcal<input id="goalThuKcal" type="number" min="0" step="1" /></label><label>Thu P<input id="goalThuP" type="number" min="0" step="1" /></label><label>Thu C<input id="goalThuC" type="number" min="0" step="1" /></label><label>Thu F<input id="goalThuF" type="number" min="0" step="1" /></label>
-                <label>Fri kcal<input id="goalFriKcal" type="number" min="0" step="1" /></label><label>Fri P<input id="goalFriP" type="number" min="0" step="1" /></label><label>Fri C<input id="goalFriC" type="number" min="0" step="1" /></label><label>Fri F<input id="goalFriF" type="number" min="0" step="1" /></label>
-                <label>Sat kcal<input id="goalSatKcal" type="number" min="0" step="1" /></label><label>Sat P<input id="goalSatP" type="number" min="0" step="1" /></label><label>Sat C<input id="goalSatC" type="number" min="0" step="1" /></label><label>Sat F<input id="goalSatF" type="number" min="0" step="1" /></label>
-                <label>Sun kcal<input id="goalSunKcal" type="number" min="0" step="1" /></label><label>Sun P<input id="goalSunP" type="number" min="0" step="1" /></label><label>Sun C<input id="goalSunC" type="number" min="0" step="1" /></label><label>Sun F<input id="goalSunF" type="number" min="0" step="1" /></label>
+              <div class="goal-global-grid">
+                <label>Daily Calories Target<input id="goalDailyKcal" type="number" min="0" step="1" /></label>
+                <label>Daily Protein Target<input id="goalDailyP" type="number" min="0" step="1" /></label>
+                <label>Daily Carbs Target<input id="goalDailyC" type="number" min="0" step="1" /></label>
+                <label>Daily Fat Target<input id="goalDailyF" type="number" min="0" step="1" /></label>
               </div>
+              <details id="goalAdvancedSchedule" class="goal-advanced-details">
+                <summary>Advanced schedule</summary>
+                <p class="muted tiny">Optional: override targets for specific days.</p>
+                <div class="goal-weekday-grid">
+                  <label>Mon kcal<input id="goalMonKcal" type="number" min="0" step="1" /></label><label>Mon P<input id="goalMonP" type="number" min="0" step="1" /></label><label>Mon C<input id="goalMonC" type="number" min="0" step="1" /></label><label>Mon F<input id="goalMonF" type="number" min="0" step="1" /></label>
+                  <label>Tue kcal<input id="goalTueKcal" type="number" min="0" step="1" /></label><label>Tue P<input id="goalTueP" type="number" min="0" step="1" /></label><label>Tue C<input id="goalTueC" type="number" min="0" step="1" /></label><label>Tue F<input id="goalTueF" type="number" min="0" step="1" /></label>
+                  <label>Wed kcal<input id="goalWedKcal" type="number" min="0" step="1" /></label><label>Wed P<input id="goalWedP" type="number" min="0" step="1" /></label><label>Wed C<input id="goalWedC" type="number" min="0" step="1" /></label><label>Wed F<input id="goalWedF" type="number" min="0" step="1" /></label>
+                  <label>Thu kcal<input id="goalThuKcal" type="number" min="0" step="1" /></label><label>Thu P<input id="goalThuP" type="number" min="0" step="1" /></label><label>Thu C<input id="goalThuC" type="number" min="0" step="1" /></label><label>Thu F<input id="goalThuF" type="number" min="0" step="1" /></label>
+                  <label>Fri kcal<input id="goalFriKcal" type="number" min="0" step="1" /></label><label>Fri P<input id="goalFriP" type="number" min="0" step="1" /></label><label>Fri C<input id="goalFriC" type="number" min="0" step="1" /></label><label>Fri F<input id="goalFriF" type="number" min="0" step="1" /></label>
+                  <label>Sat kcal<input id="goalSatKcal" type="number" min="0" step="1" /></label><label>Sat P<input id="goalSatP" type="number" min="0" step="1" /></label><label>Sat C<input id="goalSatC" type="number" min="0" step="1" /></label><label>Sat F<input id="goalSatF" type="number" min="0" step="1" /></label>
+                  <label>Sun kcal<input id="goalSunKcal" type="number" min="0" step="1" /></label><label>Sun P<input id="goalSunP" type="number" min="0" step="1" /></label><label>Sun C<input id="goalSunC" type="number" min="0" step="1" /></label><label>Sun F<input id="goalSunF" type="number" min="0" step="1" /></label>
+                </div>
+              </details>
               <button type="submit">Save Goal Period</button>
             </form>
             <div id="goalPeriodsList" class="stack"></div>
