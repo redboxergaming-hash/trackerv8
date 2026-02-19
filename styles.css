@@ -236,6 +236,29 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 }
 .settings-actions { display: flex; gap: 8px; }
 
+
+.dashboard-customize-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.dashboard-customize-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-customize-toggle input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+}
+
 .add-card { display: grid; gap: 8px; }
 .suggestions { display: grid; gap: 8px; }
 .suggestion {
@@ -431,7 +454,8 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
 .macro-fat { background: #fffbeb; }
 
 .streak-card,
-.habits-card {
+.habits-card,
+.fasting-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-1);
@@ -519,4 +543,75 @@ progress { width: 100%; height: 10px; accent-color: var(--accent); }
   border-radius: var(--radius-sm);
   padding: 10px;
   background: var(--surface-soft);
+}
+
+
+.macro-breakdown-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  background: var(--surface);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.macro-breakdown-body {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.macro-breakdown-chart-wrap {
+  min-height: 130px;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.macro-breakdown-center {
+  position: absolute;
+  font-size: var(--font-size-2);
+  font-weight: 700;
+}
+
+.macro-breakdown-legend {
+  display: grid;
+  gap: 8px;
+}
+
+.macro-breakdown-legend-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.macro-breakdown-legend-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.macro-breakdown-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+@media (max-width: 620px) {
+  .macro-breakdown-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+.fasting-metrics {
+  display: grid;
+  gap: 4px;
+}
+
+.dashboard-day-export {
+  margin-top: 8px;
+  align-items: center;
 }

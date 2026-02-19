@@ -13,6 +13,8 @@ import {
   getLoggedDatesByPerson,
   getFavorites,
   getLastPortion,
+  getDashboardLayout,
+  upsertDashboardLayout,
   getPersons,
   getRecents,
   getWeightLogsByPerson,
@@ -32,7 +34,12 @@ import {
   addWaterLog,
   addExerciseLog,
   getWaterTotalForPersonDate,
-  getExerciseTotalForPersonDate
+  getExerciseTotalForPersonDate,
+  startFasting,
+  endActiveFast,
+  getActiveFastForPerson,
+  getLatestCompletedFastForPerson,
+  getCompletedFastStreakDays
 } from './storage.js';
 import {
   closePortionDialog,
@@ -47,6 +54,8 @@ import {
   renderPersonsList,
   renderPortionPicker,
   renderSettingsPersons,
+  renderDashboardCustomization,
+  setDashboardDayExportStatus,
   renderSuggestions,
   renderFavoriteSection,
   renderRecentSection,
@@ -172,10 +181,81 @@ const state = {
   analyticsPoints: [],
   selectedGenericCategory: 'All',
   dashboardMacroView: 'consumed',
+  dashboardLayoutByPerson: {},
   mealTemplates: [],
   mealTemplateDraft: { id: null, name: '', items: [] },
   mealTemplatePickerOpen: false
 };
+
+
+const DASHBOARD_SECTION_KEYS = ['caloriesHero', 'macros', 'streak', 'habits', 'fasting', 'macroBreakdown'];
+
+function defaultDashboardLayout() {
+  return {
+    order: [...DASHBOARD_SECTION_KEYS],
+    hidden: {
+      caloriesHero: false,
+      macros: false,
+      streak: false,
+      habits: false,
+      fasting: false,
+      macroBreakdown: false
+    }
+  };
+}
+
+function normalizeDashboardLayout(layout) {
+  const base = defaultDashboardLayout();
+  const orderInput = Array.isArray(layout?.order) ? layout.order.filter((key) => DASHBOARD_SECTION_KEYS.includes(key)) : [];
+  base.order = [...orderInput, ...DASHBOARD_SECTION_KEYS.filter((key) => !orderInput.includes(key))];
+
+  if (layout && typeof layout.hidden === 'object') {
+    DASHBOARD_SECTION_KEYS.forEach((key) => {
+      base.hidden[key] = Boolean(layout.hidden[key]);
+    });
+  }
+
+  return base;
+}
+
+function layoutForPerson(personId) {
+  return normalizeDashboardLayout(state.dashboardLayoutByPerson[personId]);
+}
+
+function setDashboardCustomizeStatus(message) {
+  const statusEl = document.getElementById('dashboardCustomizeStatus');
+  if (statusEl) statusEl.textContent = message;
+}
+
+async function loadDashboardLayoutForPerson(personId) {
+  if (!personId) return;
+  if (state.dashboardLayoutByPerson[personId]) return;
+  const layout = await getDashboardLayout(personId);
+  state.dashboardLayoutByPerson[personId] = normalizeDashboardLayout(layout);
+}
+
+
+function formatDurationHours(startAt, endAt) {
+  const start = Number(startAt);
+  const end = Number(endAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return Math.round(((end - start) / 3600000) * 10) / 10;
+}
+
+async function loadFastingSummary(personId) {
+  if (!personId) return { activeFast: null, lastDurationHours: null, streakDays: 0 };
+  const [activeFast, latestCompleted, streakDays] = await Promise.all([
+    getActiveFastForPerson(personId),
+    getLatestCompletedFastForPerson(personId),
+    getCompletedFastStreakDays(personId)
+  ]);
+
+  return {
+    activeFast,
+    lastDurationHours: latestCompleted ? formatDurationHours(latestCompleted.startAt, latestCompleted.endAt) : null,
+    streakDays
+  };
+}
 
 function foodFromGeneric(item) {
   return {
@@ -445,11 +525,16 @@ async function loadAndRender() {
 
   const person = state.persons.find((p) => p.id === state.selectedPersonId);
   if (person) {
+    await loadDashboardLayoutForPerson(person.id);
+    renderDashboardCustomization(layoutForPerson(person.id));
+    setDashboardCustomizeStatus('');
     const streakDays = await computeLoggingStreakDays(person.id, state.selectedDate);
     const waterMl = await getWaterTotalForPersonDate(person.id, state.selectedDate);
     const exerciseMinutes = await getExerciseTotalForPersonDate(person.id, state.selectedDate);
+    const fasting = await loadFastingSummary(person.id);
     renderDashboard(person, state.selectedDate, entriesByPerson[person.id] || [], {
       macroView: state.dashboardMacroView,
+      layout: layoutForPerson(person.id),
       streakDays,
       habits: {
         waterMl,
@@ -457,10 +542,15 @@ async function loadAndRender() {
         waterGoalMl: Number.isFinite(Number(person.waterGoalMl)) ? Number(person.waterGoalMl) : 2000,
         exerciseGoalMinutes: Number.isFinite(Number(person.exerciseGoalMin)) ? Number(person.exerciseGoalMin) : 30,
         canLog: Boolean(person.id)
-      }
+      },
+      fasting
     });
+
     filterSuggestions(document.getElementById('foodSearchInput').value || '', person.id);
   } else {
+    renderDashboardCustomization(defaultDashboardLayout());
+    setDashboardCustomizeStatus('Select a person to customize dashboard layout.');
+    setDashboardDayExportStatus('');
     renderDashboardEmpty();
   }
 
@@ -512,6 +602,40 @@ async function handleSettingsActions(e) {
     fillPersonForm(null);
     await loadAndRender();
   }
+}
+
+async function handleDashboardCustomizeActions(e) {
+  const actionTarget = e.target.closest('[data-action]');
+  if (!actionTarget) return;
+
+  const action = actionTarget.dataset.action;
+  if (!['toggle-dashboard-section', 'move-dashboard-section-up', 'move-dashboard-section-down'].includes(action)) return;
+
+  const personId = state.selectedPersonId;
+  if (!personId) {
+    setDashboardCustomizeStatus('Select a person first.');
+    return;
+  }
+
+  const sectionKey = actionTarget.dataset.sectionKey;
+  if (!DASHBOARD_SECTION_KEYS.includes(sectionKey)) return;
+
+  const layout = layoutForPerson(personId);
+
+  if (action === 'toggle-dashboard-section') {
+    layout.hidden[sectionKey] = !actionTarget.checked;
+  } else {
+    const index = layout.order.indexOf(sectionKey);
+    if (index === -1) return;
+    const swapWith = action === 'move-dashboard-section-up' ? index - 1 : index + 1;
+    if (swapWith < 0 || swapWith >= layout.order.length) return;
+    [layout.order[index], layout.order[swapWith]] = [layout.order[swapWith], layout.order[index]];
+  }
+
+  state.dashboardLayoutByPerson[personId] = normalizeDashboardLayout(layout);
+  await upsertDashboardLayout(personId, state.dashboardLayoutByPerson[personId]);
+  setDashboardCustomizeStatus('Dashboard layout saved.');
+  await loadAndRender();
 }
 
 function buildPortionOptions(item, lastUsed) {
@@ -729,6 +853,56 @@ function downloadJsonFile(filename, data) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function handleExportDayReport() {
+  const person = state.persons.find((p) => p.id === state.selectedPersonId);
+  if (!person) {
+    setDashboardDayExportStatus('Select a person first.');
+    return;
+  }
+
+  const date = state.selectedDate;
+  const entries = await getEntriesForPersonDate(person.id, date);
+  const totals = entries.reduce(
+    (acc, item) => {
+      acc.kcal += Number(item?.kcal || 0);
+      acc.p += Number(item?.p || 0);
+      acc.c += Number(item?.c || 0);
+      acc.f += Number(item?.f || 0);
+      return acc;
+    },
+    { kcal: 0, p: 0, c: 0, f: 0 }
+  );
+
+  const [waterMl, exerciseMinutes, fasting] = await Promise.all([
+    getWaterTotalForPersonDate(person.id, date),
+    getExerciseTotalForPersonDate(person.id, date),
+    loadFastingSummary(person.id)
+  ]);
+
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    person: { id: person.id, name: person.name },
+    date,
+    entries,
+    totals: {
+      kcal: Math.round(totals.kcal * 10) / 10,
+      p: Math.round(totals.p * 10) / 10,
+      c: Math.round(totals.c * 10) / 10,
+      f: Math.round(totals.f * 10) / 10
+    },
+    habits: { waterMl, exerciseMinutes },
+    fasting: {
+      activeFast: fasting.activeFast,
+      lastDurationHours: fasting.lastDurationHours,
+      streakDays: fasting.streakDays
+    }
+  };
+
+  const safeName = String(person.name || 'person').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  downloadJsonFile(`day-report-${safeName || 'person'}-${date}.json`, payload);
+  setDashboardDayExportStatus('Day report exported. JSON downloaded.');
 }
 
 async function handleExportData() {
@@ -1038,6 +1212,20 @@ function wireEvents() {
         await loadAndRender();
         return;
       }
+      if (action === 'toggle-fasting') {
+        const active = await getActiveFastForPerson(personId);
+        if (active) {
+          await endActiveFast(personId);
+        } else {
+          await startFasting(personId);
+        }
+        await loadAndRender();
+        return;
+      }
+      if (action === 'export-day-report') {
+        await handleExportDayReport();
+        return;
+      }
     }
 
     const btn = e.target.closest('button[data-macro-view]');
@@ -1194,6 +1382,8 @@ function wireEvents() {
   document.getElementById('personForm').addEventListener('submit', handlePersonSave);
   document.getElementById('cancelEditBtn').addEventListener('click', () => fillPersonForm(null));
   document.getElementById('settingsPersons').addEventListener('click', handleSettingsActions);
+  document.getElementById('dashboardCustomizeList').addEventListener('click', handleDashboardCustomizeActions);
+  document.getElementById('dashboardCustomizeList').addEventListener('change', handleDashboardCustomizeActions);
 
   document.getElementById('exportDataBtn').addEventListener('click', async () => {
     try {
