@@ -36,6 +36,127 @@ function sumEntries(entries) {
   );
 }
 
+function createSvgElement(tag) {
+  return document.createElementNS('http://www.w3.org/2000/svg', tag);
+}
+
+function macroBreakdownRows(totals) {
+  const carbsKcal = Math.max(0, safeNum(totals?.c) * 4);
+  const proteinKcal = Math.max(0, safeNum(totals?.p) * 4);
+  const fatKcal = Math.max(0, safeNum(totals?.f) * 9);
+  const totalMacroKcal = carbsKcal + proteinKcal + fatKcal;
+
+  const rows = [
+    { key: 'carbs', label: 'Carbs', grams: safeNum(totals?.c), kcal: carbsKcal, color: '#ea580c' },
+    { key: 'protein', label: 'Protein', grams: safeNum(totals?.p), kcal: proteinKcal, color: '#0d9488' },
+    { key: 'fat', label: 'Fat', grams: safeNum(totals?.f), kcal: fatKcal, color: '#ca8a04' }
+  ];
+
+  rows.forEach((row) => {
+    row.percent = totalMacroKcal > 0 ? (row.kcal / totalMacroKcal) * 100 : 0;
+  });
+
+  return { rows, totalMacroKcal };
+}
+
+function renderMacroBreakdown(container, totals) {
+  if (!container) return;
+  container.innerHTML = '';
+
+  const { rows, totalMacroKcal } = macroBreakdownRows(totals);
+
+  const title = document.createElement('h3');
+  title.textContent = 'Macro breakdown';
+
+  const body = document.createElement('div');
+  body.className = 'macro-breakdown-body';
+
+  const chartWrap = document.createElement('div');
+  chartWrap.className = 'macro-breakdown-chart-wrap';
+
+  if (totalMacroKcal <= 0) {
+    const empty = document.createElement('p');
+    empty.className = 'muted tiny';
+    empty.textContent = 'No macro data for this day yet.';
+    chartWrap.appendChild(empty);
+  } else {
+    const size = 120;
+    const strokeWidth = 14;
+    const radius = (size - strokeWidth) / 2;
+    const circumference = 2 * Math.PI * radius;
+
+    const svg = createSvgElement('svg');
+    svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+    svg.setAttribute('width', String(size));
+    svg.setAttribute('height', String(size));
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'Macro calorie split donut chart');
+
+    const bg = createSvgElement('circle');
+    bg.setAttribute('cx', String(size / 2));
+    bg.setAttribute('cy', String(size / 2));
+    bg.setAttribute('r', String(radius));
+    bg.setAttribute('fill', 'none');
+    bg.setAttribute('stroke', 'rgba(148, 163, 184, 0.35)');
+    bg.setAttribute('stroke-width', String(strokeWidth));
+    svg.appendChild(bg);
+
+    let offset = 0;
+    rows.forEach((row) => {
+      if (!row.percent) return;
+      const segment = createSvgElement('circle');
+      segment.setAttribute('cx', String(size / 2));
+      segment.setAttribute('cy', String(size / 2));
+      segment.setAttribute('r', String(radius));
+      segment.setAttribute('fill', 'none');
+      segment.setAttribute('stroke', row.color);
+      segment.setAttribute('stroke-width', String(strokeWidth));
+      segment.setAttribute('stroke-linecap', 'butt');
+      segment.setAttribute('transform', `rotate(-90 ${size / 2} ${size / 2})`);
+      segment.setAttribute('stroke-dasharray', `${(circumference * row.percent) / 100} ${circumference}`);
+      segment.setAttribute('stroke-dashoffset', String(-offset));
+      svg.appendChild(segment);
+      offset += (circumference * row.percent) / 100;
+    });
+
+    const center = document.createElement('div');
+    center.className = 'macro-breakdown-center';
+    center.textContent = `${Math.round(totalMacroKcal)} kcal`;
+
+    chartWrap.append(svg, center);
+  }
+
+  const legend = document.createElement('div');
+  legend.className = 'macro-breakdown-legend';
+
+  rows.forEach((row) => {
+    const legendRow = document.createElement('div');
+    legendRow.className = 'macro-breakdown-legend-row';
+
+    const left = document.createElement('div');
+    left.className = 'macro-breakdown-legend-left';
+
+    const swatch = document.createElement('span');
+    swatch.className = 'macro-breakdown-swatch';
+    swatch.style.backgroundColor = row.color;
+
+    const label = document.createElement('span');
+    label.textContent = row.label;
+
+    left.append(swatch, label);
+
+    const right = document.createElement('span');
+    right.className = 'muted tiny';
+    right.textContent = `${Math.round(row.grams)}g · ${Math.round(row.percent)}%`;
+
+    legendRow.append(left, right);
+    legend.appendChild(legendRow);
+  });
+
+  body.append(chartWrap, legend);
+  container.append(title, body);
+}
+
 function macroProgress(label, value, goal) {
   if (!goal || goal <= 0) {
     return `<div class="progress-row"><strong>${label}</strong><progress max="1" value="0"></progress><span>${Math.round(value)}g / —</span></div>`;
@@ -226,6 +347,144 @@ function renderDashboardHabits(container, habits) {
   container.append(waterCard, exerciseCard);
 }
 
+
+
+const DASHBOARD_SECTION_KEYS = ['caloriesHero', 'macros', 'streak', 'habits', 'fasting', 'macroBreakdown'];
+
+function normalizeDashboardLayout(layout) {
+  const hiddenInput = layout && typeof layout.hidden === 'object' ? layout.hidden : {};
+  const hidden = {};
+  DASHBOARD_SECTION_KEYS.forEach((key) => {
+    hidden[key] = Boolean(hiddenInput[key]);
+  });
+
+  const orderInput = Array.isArray(layout?.order) ? layout.order.filter((key) => DASHBOARD_SECTION_KEYS.includes(key)) : [];
+  const order = [...orderInput, ...DASHBOARD_SECTION_KEYS.filter((key) => !orderInput.includes(key))];
+  return { order, hidden };
+}
+
+function renderDashboardSection(sectionKey, context) {
+  if (sectionKey === 'caloriesHero') {
+    return `<section class="dashboard-hero">
+      <article class="hero-card hero-calories">
+        <h3>Calories consumed</h3>
+        <p class="hero-value">${context.consumedKcal}</p>
+        <p class="muted tiny">Goal ${context.person.kcalGoal} kcal</p>
+        <div class="macro-track"><div class="macro-fill" style="width:${context.kcalProgress}%"></div></div>
+      </article>
+      <article class="hero-card hero-remaining ${context.remainingKcal <= 0 ? 'goal-met' : ''}">
+        <h3>Calories remaining</h3>
+        <p class="hero-value">${context.remainingKcal}</p>
+        <p class="muted tiny">${context.remainingKcal <= 0 ? 'Daily target reached' : 'Keep going'}</p>
+      </article>
+    </section>`;
+  }
+
+  if (sectionKey === 'macros') {
+    return `<section class="dashboard-macros">
+      <div class="row-actions macro-view-toggle" role="group" aria-label="Macro display mode">
+        <button type="button" class="secondary ${context.macroView === 'consumed' ? 'active' : ''}" data-macro-view="consumed">Consumed (g)</button>
+        <button type="button" class="secondary ${context.macroView === 'remaining' ? 'active' : ''}" data-macro-view="remaining">Remaining (g)</button>
+        <button type="button" class="secondary ${context.macroView === 'percent' ? 'active' : ''}" data-macro-view="percent">% Calories</button>
+      </div>
+      <div class="macro-grid">
+        ${renderMacroCard({ label: 'Protein', consumed: context.totals.p, goal: context.person.macroTargets?.p, kcalFactor: 4, view: context.macroView, toneClass: 'macro-protein', personKcalGoal: context.person.kcalGoal })}
+        ${renderMacroCard({ label: 'Carbs', consumed: context.totals.c, goal: context.person.macroTargets?.c, kcalFactor: 4, view: context.macroView, toneClass: 'macro-carbs', personKcalGoal: context.person.kcalGoal })}
+        ${renderMacroCard({ label: 'Fat', consumed: context.totals.f, goal: context.person.macroTargets?.f, kcalFactor: 9, view: context.macroView, toneClass: 'macro-fat', personKcalGoal: context.person.kcalGoal })}
+      </div>
+    </section>`;
+  }
+
+  if (sectionKey === 'streak') {
+    return `<section class="streak-card">
+      <h3>Logging streak</h3>
+      <p><strong>${context.streakDays} day${context.streakDays === 1 ? '' : 's'}</strong> in a row</p>
+      <div class="macro-track"><div class="macro-fill" style="width:${Math.min(100, context.streakDays * 10)}%"></div></div>
+    </section>`;
+  }
+
+  if (sectionKey === 'habits') {
+    return `<section class="habits-card">
+      <h3>Healthy Habits</h3>
+      <div id="dashboardHabits" class="habit-grid"></div>
+    </section>`;
+  }
+
+  if (sectionKey === 'fasting') {
+    return `<section class="fasting-card">
+      <h3>Fasting</h3>
+      <div id="dashboardFasting" class="stack"></div>
+    </section>`;
+  }
+
+  if (sectionKey === 'macroBreakdown') {
+    return '<section id="macroBreakdownCard" class="macro-breakdown-card"></section>';
+  }
+
+  return '';
+}
+
+function formatDateTime(ts) {
+  const d = new Date(Number(ts));
+  if (!Number.isFinite(d.getTime())) return '—';
+  return d.toLocaleString();
+}
+
+function activeDurationHours(startAt) {
+  const start = Number(startAt);
+  if (!Number.isFinite(start)) return null;
+  const now = Date.now();
+  if (now <= start) return 0;
+  return Math.round(((now - start) / 3600000) * 10) / 10;
+}
+
+export function renderFastingCard(container, fasting = {}) {
+  if (!container) return;
+  container.innerHTML = '';
+
+  const activeFast = fasting?.activeFast || null;
+  const streakDays = Number.isFinite(Number(fasting?.streakDays)) ? Number(fasting.streakDays) : 0;
+  const lastDurationHours = Number.isFinite(Number(fasting?.lastDurationHours)) ? Number(fasting.lastDurationHours) : null;
+
+  const top = document.createElement('div');
+  top.className = 'row-actions';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.dataset.action = 'toggle-fasting';
+  toggleBtn.textContent = activeFast ? 'End fast' : 'Start fast';
+
+  const stateText = document.createElement('span');
+  stateText.className = 'muted tiny';
+  if (activeFast) {
+    const hrs = activeDurationHours(activeFast.startAt);
+    stateText.textContent = `Active · ${hrs == null ? '—' : hrs}h · since ${formatDateTime(activeFast.startAt)}`;
+  } else {
+    stateText.textContent = 'No active fast';
+  }
+
+  top.append(toggleBtn, stateText);
+
+  const metrics = document.createElement('div');
+  metrics.className = 'fasting-metrics';
+
+  const duration = document.createElement('p');
+  duration.className = 'muted tiny';
+  duration.textContent = `Last duration: ${lastDurationHours == null ? '—' : `${lastDurationHours}h`}`;
+
+  const streak = document.createElement('p');
+  streak.className = 'muted tiny';
+  streak.textContent = `Streak: ${streakDays} day${streakDays === 1 ? '' : 's'}`;
+
+  metrics.append(duration, streak);
+  container.append(top, metrics);
+}
+
+export function setDashboardDayExportStatus(message) {
+  const elStatus = el('dashboardDayExportStatus');
+  if (elStatus) elStatus.textContent = message;
+}
+
 export function renderDashboard(person, date, entries, options = {}) {
   const totals = sumEntries(entries);
   const consumedKcal = Math.round(totals.kcal);
@@ -233,55 +492,58 @@ export function renderDashboard(person, date, entries, options = {}) {
   const kcalProgress = person.kcalGoal > 0 ? Math.min(100, Math.round((totals.kcal / person.kcalGoal) * 100)) : 0;
   const macroView = options.macroView || 'consumed';
   const streakDays = Number.isFinite(options.streakDays) ? options.streakDays : 0;
+  const layout = normalizeDashboardLayout(options.layout);
 
-  el('dashboardSummary').innerHTML = `
-    <section class="dashboard-hero">
-      <article class="hero-card hero-calories">
-        <h3>Calories consumed</h3>
-        <p class="hero-value">${consumedKcal}</p>
-        <p class="muted tiny">Goal ${person.kcalGoal} kcal</p>
-        <div class="macro-track"><div class="macro-fill" style="width:${kcalProgress}%"></div></div>
-      </article>
-      <article class="hero-card hero-remaining ${remainingKcal <= 0 ? 'goal-met' : ''}">
-        <h3>Calories remaining</h3>
-        <p class="hero-value">${remainingKcal}</p>
-        <p class="muted tiny">${remainingKcal <= 0 ? 'Daily target reached' : 'Keep going'}</p>
-      </article>
-    </section>
+  const context = {
+    person,
+    totals,
+    consumedKcal,
+    remainingKcal,
+    kcalProgress,
+    macroView,
+    streakDays
+  };
 
-    <section class="dashboard-macros">
-      <div class="row-actions macro-view-toggle" role="group" aria-label="Macro display mode">
-        <button type="button" class="secondary ${macroView === 'consumed' ? 'active' : ''}" data-macro-view="consumed">Consumed (g)</button>
-        <button type="button" class="secondary ${macroView === 'remaining' ? 'active' : ''}" data-macro-view="remaining">Remaining (g)</button>
-        <button type="button" class="secondary ${macroView === 'percent' ? 'active' : ''}" data-macro-view="percent">% Calories</button>
-      </div>
-      <div class="macro-grid">
-        ${renderMacroCard({ label: 'Protein', consumed: totals.p, goal: person.macroTargets?.p, kcalFactor: 4, view: macroView, toneClass: 'macro-protein', personKcalGoal: person.kcalGoal })}
-        ${renderMacroCard({ label: 'Carbs', consumed: totals.c, goal: person.macroTargets?.c, kcalFactor: 4, view: macroView, toneClass: 'macro-carbs', personKcalGoal: person.kcalGoal })}
-        ${renderMacroCard({ label: 'Fat', consumed: totals.f, goal: person.macroTargets?.f, kcalFactor: 9, view: macroView, toneClass: 'macro-fat', personKcalGoal: person.kcalGoal })}
-      </div>
-    </section>
+  const sectionsHtml = layout.order
+    .filter((sectionKey) => !layout.hidden[sectionKey])
+    .map((sectionKey) => renderDashboardSection(sectionKey, context))
+    .join('');
 
-    <section class="streak-card">
-      <h3>Logging streak</h3>
-      <p><strong>${streakDays} day${streakDays === 1 ? '' : 's'}</strong> in a row</p>
-      <div class="macro-track"><div class="macro-fill" style="width:${Math.min(100, streakDays * 10)}%"></div></div>
-    </section>
+  el('dashboardSummary').innerHTML = `${sectionsHtml}<p class="muted">Date: ${date}</p>`;
 
-    <section class="habits-card">
-      <h3>Healthy Habits</h3>
-      <div id="dashboardHabits" class="habit-grid"></div>
-    </section>
-    <p class="muted">Date: ${date}</p>
-  `;
+  const habitsContainer = el('dashboardHabits');
+  if (habitsContainer) {
+    renderDashboardHabits(habitsContainer, {
+      waterMl: options.habits?.waterMl,
+      exerciseMinutes: options.habits?.exerciseMinutes,
+      waterGoalMl: options.habits?.waterGoalMl || 2000,
+      exerciseGoalMinutes: options.habits?.exerciseGoalMinutes || 30,
+      canLog: options.habits?.canLog !== false
+    });
+  }
 
-  renderDashboardHabits(el('dashboardHabits'), {
-    waterMl: options.habits?.waterMl,
-    exerciseMinutes: options.habits?.exerciseMinutes,
-    waterGoalMl: options.habits?.waterGoalMl || 2000,
-    exerciseGoalMinutes: options.habits?.exerciseGoalMinutes || 30,
-    canLog: options.habits?.canLog !== false
-  });
+  const macroContainer = el('macroBreakdownCard');
+  if (macroContainer) {
+    renderMacroBreakdown(macroContainer, totals);
+  }
+
+  const fastingContainer = el('dashboardFasting');
+  if (fastingContainer) {
+    renderFastingCard(fastingContainer, options.fasting || {});
+  }
+
+  const exportWrap = document.createElement('div');
+  exportWrap.className = 'row-actions dashboard-day-export';
+  const exportBtn = document.createElement('button');
+  exportBtn.type = 'button';
+  exportBtn.className = 'secondary';
+  exportBtn.dataset.action = 'export-day-report';
+  exportBtn.textContent = 'Export day';
+  const status = document.createElement('span');
+  status.id = 'dashboardDayExportStatus';
+  status.className = 'muted tiny';
+  exportWrap.append(exportBtn, status);
+  el('dashboardSummary').appendChild(exportWrap);
 
   el('entriesTableContainer').innerHTML = entries.length
     ? `<table>
@@ -327,6 +589,65 @@ export function renderSettingsPersons(persons) {
     </article>`
     )
     .join('');
+}
+
+export function renderDashboardCustomization(layout) {
+  const wrap = el('dashboardCustomizeList');
+  if (!wrap) return;
+
+  const normalized = normalizeDashboardLayout(layout);
+  const labels = {
+    caloriesHero: 'Calories hero',
+    macros: 'Macros section',
+    streak: 'Logging streak',
+    habits: 'Healthy Habits',
+    fasting: 'Fasting',
+    macroBreakdown: 'Macro Breakdown'
+  };
+
+  wrap.innerHTML = '';
+
+  normalized.order.forEach((key, index) => {
+    const row = document.createElement('div');
+    row.className = 'dashboard-customize-row';
+
+    const toggleLabel = document.createElement('label');
+    toggleLabel.className = 'dashboard-customize-toggle';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !normalized.hidden[key];
+    checkbox.dataset.action = 'toggle-dashboard-section';
+    checkbox.dataset.sectionKey = key;
+
+    const text = document.createElement('span');
+    text.textContent = labels[key] || key;
+
+    toggleLabel.append(checkbox, text);
+
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'secondary tiny-action';
+    upBtn.textContent = '↑';
+    upBtn.dataset.action = 'move-dashboard-section-up';
+    upBtn.dataset.sectionKey = key;
+    upBtn.disabled = index === 0;
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'secondary tiny-action';
+    downBtn.textContent = '↓';
+    downBtn.dataset.action = 'move-dashboard-section-down';
+    downBtn.dataset.sectionKey = key;
+    downBtn.disabled = index === normalized.order.length - 1;
+
+    actions.append(upBtn, downBtn);
+    row.append(toggleLabel, actions);
+    wrap.appendChild(row);
+  });
 }
 
 export function fillPersonForm(person) {

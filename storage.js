@@ -1,5 +1,5 @@
 const DB_NAME = 'macroTrackerDB';
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 
 function promisify(req) {
   return new Promise((resolve, reject) => {
@@ -170,6 +170,7 @@ export function openDb() {
       let mealTemplates = ensureStore(db, 'mealTemplates', { keyPath: 'id' });
       let waterLogs = ensureStore(db, 'waterLogs', { keyPath: 'id' });
       let exerciseLogs = ensureStore(db, 'exerciseLogs', { keyPath: 'id' });
+      let fastingLogs = ensureStore(db, 'fastingLogs', { keyPath: 'id' });
       ensureStore(db, 'meta', { keyPath: 'key' });
 
       if (!persons) persons = tx.objectStore('persons');
@@ -180,6 +181,7 @@ export function openDb() {
       if (!mealTemplates) mealTemplates = tx.objectStore('mealTemplates');
       if (!waterLogs) waterLogs = tx.objectStore('waterLogs');
       if (!exerciseLogs) exerciseLogs = tx.objectStore('exerciseLogs');
+      if (!fastingLogs) fastingLogs = tx.objectStore('fastingLogs');
 
       ensureIndex(entries, 'byPersonDate', ['personId', 'date']);
       ensureIndex(entries, 'byPersonDateTime', ['personId', 'date', 'time']);
@@ -197,6 +199,8 @@ export function openDb() {
       ensureIndex(mealTemplates, 'byUpdatedAt', 'updatedAt');
       ensureIndex(waterLogs, 'byPersonDate', ['personId', 'date']);
       ensureIndex(exerciseLogs, 'byPersonDate', ['personId', 'date']);
+      ensureIndex(fastingLogs, 'byPersonStartAt', ['personId', 'startAt']);
+      ensureIndex(fastingLogs, 'byPersonDateKey', ['personId', 'dateKey']);
 
       if (oldVersion < 2) {
         const cursorReq = persons.openCursor();
@@ -239,12 +243,15 @@ export function openDb() {
 
 export async function seedSampleData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'meta', 'favorites', 'recents', 'weightLogs'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'meta', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs'], 'readwrite');
   tx.objectStore('persons').clear();
   tx.objectStore('entries').clear();
   tx.objectStore('favorites').clear();
   tx.objectStore('recents').clear();
   tx.objectStore('weightLogs').clear();
+  tx.objectStore('waterLogs').clear();
+  tx.objectStore('exerciseLogs').clear();
+  tx.objectStore('fastingLogs').clear();
 
   const persons = [
     { id: crypto.randomUUID(), name: 'Alex', kcalGoal: 2200, macroTargets: { p: 160, c: 240, f: 70 }, waterGoalMl: 2000, exerciseGoalMin: 30 },
@@ -312,7 +319,7 @@ export async function upsertPerson(person) {
 
 export async function deletePersonCascade(personId) {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'favorites', 'recents', 'weightLogs'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'meta'], 'readwrite');
   tx.objectStore('persons').delete(personId);
 
   const deleteByIndex = (storeName, indexName, keyRange) => {
@@ -330,6 +337,10 @@ export async function deletePersonCascade(personId) {
   deleteByIndex('favorites', 'byPerson', IDBKeyRange.only(personId));
   deleteByIndex('recents', 'byPersonUsedAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
   deleteByIndex('weightLogs', 'byPerson', IDBKeyRange.only(personId));
+  deleteByIndex('waterLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
+  deleteByIndex('exerciseLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
+  deleteByIndex('fastingLogs', 'byPersonStartAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
+  tx.objectStore('meta').delete(`dashboardLayout:${personId}`);
 
   await txDone(tx);
 }
@@ -501,6 +512,98 @@ export async function getWaterTotalForPersonDate(personId, date) {
 
 export async function getExerciseTotalForPersonDate(personId, date) {
   return getHabitTotal('exerciseLogs', 'minutes', personId, date);
+}
+
+function localDateKeyFromTs(timestamp) {
+  const d = new Date(timestamp);
+  if (!Number.isFinite(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export async function startFasting(personId, startAt = Date.now()) {
+  await ensurePersonExists(personId);
+  const startedAt = Number(startAt);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) throw new Error('startAt must be a valid timestamp');
+
+  const active = await getActiveFastForPerson(personId);
+  if (active) throw new Error('active fast already exists');
+
+  const dateKey = localDateKeyFromTs(startedAt);
+  if (!dateKey) throw new Error('invalid startAt');
+
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readwrite');
+  const row = { id: createId(), personId, startAt: startedAt, endAt: null, dateKey };
+  tx.objectStore('fastingLogs').put(row);
+  await txDone(tx);
+  return row;
+}
+
+export async function endActiveFast(personId, endAt = Date.now()) {
+  await ensurePersonExists(personId);
+  const endedAt = Number(endAt);
+  if (!Number.isFinite(endedAt) || endedAt <= 0) throw new Error('endAt must be a valid timestamp');
+
+  const active = await getActiveFastForPerson(personId);
+  if (!active) throw new Error('no active fast');
+  if (endedAt <= Number(active.startAt)) throw new Error('endAt must be after startAt');
+
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readwrite');
+  const store = tx.objectStore('fastingLogs');
+  store.put({ ...active, endAt: endedAt });
+  await txDone(tx);
+  return { ...active, endAt: endedAt };
+}
+
+export async function getActiveFastForPerson(personId) {
+  if (!personId) return null;
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readonly');
+  const index = tx.objectStore('fastingLogs').index('byPersonStartAt');
+  const rows = await promisify(index.getAll(IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER])));
+  const active = rows.filter((item) => item && item.endAt == null).sort((a, b) => Number(b.startAt || 0) - Number(a.startAt || 0));
+  return active[0] || null;
+}
+
+export async function getLatestCompletedFastForPerson(personId) {
+  if (!personId) return null;
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readonly');
+  const index = tx.objectStore('fastingLogs').index('byPersonStartAt');
+  const rows = await promisify(index.getAll(IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER])));
+  const completed = rows
+    .filter((item) => item && Number.isFinite(Number(item.startAt)) && Number.isFinite(Number(item.endAt)) && Number(item.endAt) > Number(item.startAt))
+    .sort((a, b) => Number(b.endAt || 0) - Number(a.endAt || 0));
+  return completed[0] || null;
+}
+
+export async function getCompletedFastStreakDays(personId) {
+  if (!personId) return 0;
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readonly');
+  const index = tx.objectStore('fastingLogs').index('byPersonDateKey');
+  const rows = await promisify(index.getAll(IDBKeyRange.bound([personId, ''], [personId, '\uffff'])));
+  const completedDateKeys = [...new Set(
+    rows
+      .filter((item) => Number.isFinite(Number(item?.startAt)) && Number.isFinite(Number(item?.endAt)) && Number(item.endAt) > Number(item.startAt))
+      .map((item) => item.dateKey)
+      .filter((v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v))
+  )].sort((a, b) => b.localeCompare(a));
+
+  if (!completedDateKeys.length) return 0;
+  let streak = 1;
+  for (let i = 1; i < completedDateKeys.length; i += 1) {
+    const prev = new Date(`${completedDateKeys[i - 1]}T00:00:00`);
+    const curr = new Date(`${completedDateKeys[i]}T00:00:00`);
+    const diffDays = Math.round((prev.getTime() - curr.getTime()) / 86400000);
+    if (diffDays !== 1) break;
+    streak += 1;
+  }
+  return streak;
 }
 
 export async function getMealTemplates() {
@@ -709,6 +812,23 @@ export async function getLastPortion(lastPortionKey) {
   return row?.value ?? null;
 }
 
+export async function getDashboardLayout(personId) {
+  if (!personId) return null;
+  const db = await openDb();
+  const tx = db.transaction('meta', 'readonly');
+  const row = await promisify(tx.objectStore('meta').get(`dashboardLayout:${personId}`));
+  return row?.value ?? null;
+}
+
+export async function upsertDashboardLayout(personId, layout) {
+  if (!personId) throw new Error('personId is required');
+  const db = await openDb();
+  const tx = db.transaction('meta', 'readwrite');
+  tx.objectStore('meta').put({ key: `dashboardLayout:${personId}`, value: layout });
+  await txDone(tx);
+  return layout;
+}
+
 
 function uniqueById(items, idKey = 'id') {
   const map = new Map();
@@ -721,9 +841,9 @@ function uniqueById(items, idKey = 'id') {
 
 export async function exportAllData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs'], 'readonly');
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs'], 'readonly');
 
-  const [persons, entries, productsCache, favorites, recents, weightLogs, waterLogs, exerciseLogs] = await Promise.all([
+  const [persons, entries, productsCache, favorites, recents, weightLogs, waterLogs, exerciseLogs, fastingLogs] = await Promise.all([
     promisify(tx.objectStore('persons').getAll()),
     promisify(tx.objectStore('entries').getAll()),
     promisify(tx.objectStore('productsCache').getAll()),
@@ -731,7 +851,8 @@ export async function exportAllData() {
     promisify(tx.objectStore('recents').getAll()),
     promisify(tx.objectStore('weightLogs').getAll()),
     promisify(tx.objectStore('waterLogs').getAll()),
-    promisify(tx.objectStore('exerciseLogs').getAll())
+    promisify(tx.objectStore('exerciseLogs').getAll()),
+    promisify(tx.objectStore('fastingLogs').getAll())
   ]);
 
   return {
@@ -744,15 +865,16 @@ export async function exportAllData() {
     recents,
     weightLogs,
     waterLogs,
-    exerciseLogs
+    exerciseLogs,
+    fastingLogs
   };
 }
 
 export async function importAllData(payload) {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'meta'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'meta'], 'readwrite');
 
-  const storesToReset = ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs'];
+  const storesToReset = ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs'];
   storesToReset.forEach((storeName) => tx.objectStore(storeName).clear());
 
   const persons = uniqueById(payload.persons || []);
@@ -763,6 +885,7 @@ export async function importAllData(payload) {
   const weightLogs = [];
   const waterLogs = uniqueById(payload.waterLogs || []);
   const exerciseLogs = uniqueById(payload.exerciseLogs || []);
+  const fastingLogs = uniqueById(payload.fastingLogs || []);
   const weightByPersonDate = new Map();
   for (const row of payload.weightLogs || []) {
     const cleaned = sanitizeWeightLog(row);
@@ -779,6 +902,7 @@ export async function importAllData(payload) {
   weightLogs.forEach((item) => tx.objectStore('weightLogs').put(item));
   waterLogs.forEach((item) => tx.objectStore('waterLogs').put(item));
   exerciseLogs.forEach((item) => tx.objectStore('exerciseLogs').put(item));
+  fastingLogs.forEach((item) => tx.objectStore('fastingLogs').put(item));
 
   tx.objectStore('meta').put({ key: 'lastImportAt', value: new Date().toISOString() });
 
@@ -791,14 +915,15 @@ export async function importAllData(payload) {
     recents: recents.length,
     weightLogs: weightLogs.length,
     waterLogs: waterLogs.length,
-    exerciseLogs: exerciseLogs.length
+    exerciseLogs: exerciseLogs.length,
+    fastingLogs: fastingLogs.length
   };
 }
 
 export async function deleteAllData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'meta'], 'readwrite');
-  ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'meta'].forEach((storeName) => {
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'meta'], 'readwrite');
+  ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'meta'].forEach((storeName) => {
     tx.objectStore(storeName).clear();
   });
   await txDone(tx);
