@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { clamp, computeNutritionFromPer100g, roundTo, safeNumber } from './math.js';
+import { clamp, computeConsistencyBadges, computeNutritionFromPer100g, roundTo, safeNumber } from './math.js';
 
 test('safeNumber returns fallback for invalid input', () => {
   assert.equal(safeNumber('abc', 3), 3);
@@ -23,4 +23,31 @@ test('clamp bounds values', () => {
 test('computeNutritionFromPer100g scales macros', () => {
   const out = computeNutritionFromPer100g({ kcal100g: 200, p100g: 10, c100g: 20, f100g: 5 }, 150);
   assert.deepEqual(out, { kcal: 300, p: 15, c: 30, f: 7.5 });
+});
+
+
+test('computeConsistencyBadges returns score and badges', () => {
+  const out = computeConsistencyBadges({
+    streakDays: 7,
+    days: [
+      { logged: true, proteinGoalMet: true },
+      { logged: true, proteinGoalMet: true },
+      { logged: true, proteinGoalMet: true },
+      { logged: true, proteinGoalMet: true },
+      { logged: true, proteinGoalMet: true },
+      { logged: true, proteinGoalMet: false },
+      { logged: false, proteinGoalMet: false }
+    ]
+  });
+
+  assert.equal(out.consistencyScore, 86);
+  assert.equal(out.loggedDays, 6);
+  assert.equal(out.proteinGoalMetDays, 5);
+  assert.deepEqual(out.badges, ['Logged 7 days in a row', 'Hit protein goal 5/7 days', 'Consistency 80%+']);
+});
+
+test('computeConsistencyBadges handles empty days', () => {
+  const out = computeConsistencyBadges({ days: [], streakDays: 0 });
+  assert.equal(out.consistencyScore, 0);
+  assert.deepEqual(out.badges, []);
 });

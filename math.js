@@ -22,3 +22,23 @@ export function computeNutritionFromPer100g(per100g, grams) {
     f: roundTo(safeNumber(per100g.f100g) * ratio, 1)
   };
 }
+
+
+export function computeConsistencyBadges({ days = [], streakDays = 0 } = {}) {
+  const recent = Array.isArray(days) ? days.slice(0, 7) : [];
+  const loggedDays = recent.filter((d) => Boolean(d?.logged)).length;
+  const proteinGoalMetDays = recent.filter((d) => Boolean(d?.proteinGoalMet)).length;
+  const consistencyScore = roundTo((loggedDays / 7) * 100, 0);
+
+  const badges = [];
+  if (Number(streakDays) >= 7) badges.push('Logged 7 days in a row');
+  if (proteinGoalMetDays >= 5) badges.push('Hit protein goal 5/7 days');
+  if (consistencyScore >= 80) badges.push('Consistency 80%+');
+
+  return {
+    consistencyScore,
+    loggedDays,
+    proteinGoalMetDays,
+    badges: badges.slice(0, 3)
+  };
+}

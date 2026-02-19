@@ -1,5 +1,5 @@
 const DB_NAME = 'macroTrackerDB';
-const DB_VERSION = 6;
+const DB_VERSION = 8;
 
 function promisify(req) {
   return new Promise((resolve, reject) => {
@@ -80,6 +80,59 @@ function normalizeMealTemplateItem(item) {
   };
 }
 
+function normalizeRecipeItem(item) {
+  const grams = toFiniteNumber(item?.grams, NaN);
+  const per100g = {
+    kcal: toFiniteNumber(item?.per100g?.kcal, NaN),
+    protein: toFiniteNumber(item?.per100g?.protein, NaN),
+    carbs: toFiniteNumber(item?.per100g?.carbs, NaN),
+    fat: toFiniteNumber(item?.per100g?.fat, NaN)
+  };
+  const hasInvalidMacros = Object.values(per100g).some((value) => !Number.isFinite(value) || value < 0);
+  if (!item?.foodKey || !item?.label || !Number.isFinite(grams) || grams <= 0 || hasInvalidMacros) {
+    return null;
+  }
+  return {
+    foodKey: String(item.foodKey),
+    label: String(item.label),
+    per100g,
+    grams
+  };
+}
+
+function computeRecipeDerived(items, servingsDefault) {
+  const safeServings = Number.isFinite(Number(servingsDefault)) && Number(servingsDefault) > 0 ? Number(servingsDefault) : 1;
+  const total = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+  let totalGrams = 0;
+  (items || []).forEach((item) => {
+    const grams = Number(item?.grams || 0);
+    if (!Number.isFinite(grams) || grams <= 0) return;
+    totalGrams += grams;
+    total.kcal += (Number(item?.per100g?.kcal || 0) * grams) / 100;
+    total.protein += (Number(item?.per100g?.protein || 0) * grams) / 100;
+    total.carbs += (Number(item?.per100g?.carbs || 0) * grams) / 100;
+    total.fat += (Number(item?.per100g?.fat || 0) * grams) / 100;
+  });
+  const round = (v) => Math.round(v * 10) / 10;
+  const per100gFactor = totalGrams > 0 ? 100 / totalGrams : 0;
+  return {
+    totalGrams: round(totalGrams),
+    total: { kcal: round(total.kcal), protein: round(total.protein), carbs: round(total.carbs), fat: round(total.fat) },
+    per100g: {
+      kcal: round(total.kcal * per100gFactor),
+      protein: round(total.protein * per100gFactor),
+      carbs: round(total.carbs * per100gFactor),
+      fat: round(total.fat * per100gFactor)
+    },
+    perServing: {
+      kcal: round(total.kcal / safeServings),
+      protein: round(total.protein / safeServings),
+      carbs: round(total.carbs / safeServings),
+      fat: round(total.fat / safeServings)
+    }
+  };
+}
+
 function scalePer100g(per100g, grams) {
   const ratio = toFiniteNumber(grams) / 100;
   return {
@@ -107,6 +160,7 @@ function upsertRecentInTx(tx, payload) {
       label: payload.label,
       nutrition: payload.nutrition,
       pieceGramHint: payload.pieceGramHint ?? null,
+      imageThumbUrl: payload.imageThumbUrl || null,
       sourceType: payload.sourceType,
       usedAt: Date.now()
     });
@@ -168,8 +222,11 @@ export function openDb() {
       let recents = ensureStore(db, 'recents', { keyPath: 'id' });
       let weightLogs = ensureStore(db, 'weightLogs', { keyPath: 'id', autoIncrement: true });
       let mealTemplates = ensureStore(db, 'mealTemplates', { keyPath: 'id' });
+      let recipes = ensureStore(db, 'recipes', { keyPath: 'id' });
+      let goalPeriods = ensureStore(db, 'goalPeriods', { keyPath: 'id' });
       let waterLogs = ensureStore(db, 'waterLogs', { keyPath: 'id' });
       let exerciseLogs = ensureStore(db, 'exerciseLogs', { keyPath: 'id' });
+      let fastingLogs = ensureStore(db, 'fastingLogs', { keyPath: 'id' });
       ensureStore(db, 'meta', { keyPath: 'key' });
 
       if (!persons) persons = tx.objectStore('persons');
@@ -178,8 +235,11 @@ export function openDb() {
       if (!recents) recents = tx.objectStore('recents');
       if (!weightLogs) weightLogs = tx.objectStore('weightLogs');
       if (!mealTemplates) mealTemplates = tx.objectStore('mealTemplates');
+      if (!recipes) recipes = tx.objectStore('recipes');
+      if (!goalPeriods) goalPeriods = tx.objectStore('goalPeriods');
       if (!waterLogs) waterLogs = tx.objectStore('waterLogs');
       if (!exerciseLogs) exerciseLogs = tx.objectStore('exerciseLogs');
+      if (!fastingLogs) fastingLogs = tx.objectStore('fastingLogs');
 
       ensureIndex(entries, 'byPersonDate', ['personId', 'date']);
       ensureIndex(entries, 'byPersonDateTime', ['personId', 'date', 'time']);
@@ -195,8 +255,13 @@ export function openDb() {
       ensureIndex(weightLogs, 'byPerson', 'personId');
       ensureIndex(weightLogs, 'byDate', 'date');
       ensureIndex(mealTemplates, 'byUpdatedAt', 'updatedAt');
+      ensureIndex(recipes, 'byUpdatedAt', 'updatedAt');
+      ensureIndex(goalPeriods, 'byPersonDateRange', ['personId', 'startDate', 'endDate']);
+      ensureIndex(goalPeriods, 'byPersonUpdatedAt', ['personId', 'updatedAt']);
       ensureIndex(waterLogs, 'byPersonDate', ['personId', 'date']);
       ensureIndex(exerciseLogs, 'byPersonDate', ['personId', 'date']);
+      ensureIndex(fastingLogs, 'byPersonStartAt', ['personId', 'startAt']);
+      ensureIndex(fastingLogs, 'byPersonDateKey', ['personId', 'dateKey']);
 
       if (oldVersion < 2) {
         const cursorReq = persons.openCursor();
@@ -239,12 +304,17 @@ export function openDb() {
 
 export async function seedSampleData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'meta', 'favorites', 'recents', 'weightLogs'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'meta', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'recipes', 'goalPeriods'], 'readwrite');
   tx.objectStore('persons').clear();
   tx.objectStore('entries').clear();
   tx.objectStore('favorites').clear();
   tx.objectStore('recents').clear();
   tx.objectStore('weightLogs').clear();
+  tx.objectStore('waterLogs').clear();
+  tx.objectStore('exerciseLogs').clear();
+  tx.objectStore('fastingLogs').clear();
+  tx.objectStore('recipes').clear();
+  tx.objectStore('goalPeriods').clear();
 
   const persons = [
     { id: crypto.randomUUID(), name: 'Alex', kcalGoal: 2200, macroTargets: { p: 160, c: 240, f: 70 }, waterGoalMl: 2000, exerciseGoalMin: 30 },
@@ -312,7 +382,7 @@ export async function upsertPerson(person) {
 
 export async function deletePersonCascade(personId) {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'favorites', 'recents', 'weightLogs'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'goalPeriods', 'meta'], 'readwrite');
   tx.objectStore('persons').delete(personId);
 
   const deleteByIndex = (storeName, indexName, keyRange) => {
@@ -330,6 +400,11 @@ export async function deletePersonCascade(personId) {
   deleteByIndex('favorites', 'byPerson', IDBKeyRange.only(personId));
   deleteByIndex('recents', 'byPersonUsedAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
   deleteByIndex('weightLogs', 'byPerson', IDBKeyRange.only(personId));
+  deleteByIndex('waterLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
+  deleteByIndex('exerciseLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
+  deleteByIndex('fastingLogs', 'byPersonStartAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
+  deleteByIndex('goalPeriods', 'byPersonUpdatedAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
+  tx.objectStore('meta').delete(`dashboardLayout:${personId}`);
 
   await txDone(tx);
 }
@@ -431,6 +506,7 @@ export async function addEntry(entry) {
       label: cleaned.recentItem.label,
       nutrition: cleaned.recentItem.nutrition,
       pieceGramHint: cleaned.recentItem.pieceGramHint,
+      imageThumbUrl: cleaned.recentItem.imageThumbUrl || null,
       sourceType: cleaned.recentItem.sourceType
     });
   }
@@ -443,6 +519,102 @@ export async function addEntry(entry) {
   return stored;
 }
 
+
+function normalizeGoalValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function normalizeWeekdayGoal(dayGoal = {}) {
+  return {
+    kcal: normalizeGoalValue(dayGoal.kcal),
+    protein: normalizeGoalValue(dayGoal.protein),
+    carbs: normalizeGoalValue(dayGoal.carbs),
+    fat: normalizeGoalValue(dayGoal.fat)
+  };
+}
+
+const WEEKDAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+function normalizeWeekdayGoals(weekdayGoals = {}) {
+  const out = {};
+  WEEKDAY_KEYS.forEach((key) => {
+    out[key] = normalizeWeekdayGoal(weekdayGoals[key] || {});
+  });
+  return out;
+}
+
+function weekdayKeyFromIsoDate(isoDate) {
+  const d = new Date(`${isoDate}T00:00:00`);
+  if (!Number.isFinite(d.getTime())) return null;
+  return WEEKDAY_KEYS[(d.getDay() + 6) % 7];
+}
+
+export async function getGoalPeriodsByPerson(personId) {
+  if (!personId) return [];
+  const db = await openDb();
+  const tx = db.transaction('goalPeriods', 'readonly');
+  const idx = tx.objectStore('goalPeriods').index('byPersonUpdatedAt');
+  const rows = await promisify(idx.getAll(IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER])));
+  return rows.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+}
+
+export async function upsertGoalPeriod(period) {
+  if (!period?.personId) throw new Error('personId is required');
+  const name = String(period?.name || '').trim();
+  if (!name || name.length > 80) throw new Error('Goal period name must be 1-80 chars');
+  const startDate = String(period?.startDate || '');
+  const endDate = String(period?.endDate || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
+    throw new Error('Invalid date range');
+  }
+  const weekdayGoals = normalizeWeekdayGoals(period.weekdayGoals || {});
+
+  const db = await openDb();
+  const tx = db.transaction('goalPeriods', 'readwrite');
+  const store = tx.objectStore('goalPeriods');
+  const existing = period?.id ? await promisify(store.get(period.id)) : null;
+  const now = Date.now();
+  const row = {
+    id: period?.id || createId(),
+    personId: period.personId,
+    name,
+    startDate,
+    endDate,
+    weekdayGoals,
+    createdAt: Number(existing?.createdAt || period?.createdAt || now),
+    updatedAt: now
+  };
+  store.put(row);
+  await txDone(tx);
+  return row;
+}
+
+export async function resolveGoalForPersonDate(person, date) {
+  if (!person?.id || !date) return null;
+  const periods = await getGoalPeriodsByPerson(person.id);
+  const active = periods.find((p) => p.startDate <= date && p.endDate >= date);
+  if (!active) return null;
+  const dayKey = weekdayKeyFromIsoDate(date);
+  const dayGoal = dayKey ? active.weekdayGoals?.[dayKey] : null;
+  if (!dayGoal) return null;
+
+  const kcal = Number(dayGoal.kcal);
+  const protein = Number(dayGoal.protein);
+  const carbs = Number(dayGoal.carbs);
+  const fat = Number(dayGoal.fat);
+
+  return {
+    periodId: active.id,
+    periodName: active.name,
+    kcalGoal: Number.isFinite(kcal) && kcal > 0 ? kcal : Number(person.kcalGoal),
+    macroTargets: {
+      p: Number.isFinite(protein) ? protein : person?.macroTargets?.p ?? null,
+      c: Number.isFinite(carbs) ? carbs : person?.macroTargets?.c ?? null,
+      f: Number.isFinite(fat) ? fat : person?.macroTargets?.f ?? null
+    }
+  };
+}
 
 export async function addWaterLog({ personId, date, amountMl }) {
   if (!date) throw new Error('date is required');
@@ -503,6 +675,98 @@ export async function getExerciseTotalForPersonDate(personId, date) {
   return getHabitTotal('exerciseLogs', 'minutes', personId, date);
 }
 
+function localDateKeyFromTs(timestamp) {
+  const d = new Date(timestamp);
+  if (!Number.isFinite(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export async function startFasting(personId, startAt = Date.now()) {
+  await ensurePersonExists(personId);
+  const startedAt = Number(startAt);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) throw new Error('startAt must be a valid timestamp');
+
+  const active = await getActiveFastForPerson(personId);
+  if (active) throw new Error('active fast already exists');
+
+  const dateKey = localDateKeyFromTs(startedAt);
+  if (!dateKey) throw new Error('invalid startAt');
+
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readwrite');
+  const row = { id: createId(), personId, startAt: startedAt, endAt: null, dateKey };
+  tx.objectStore('fastingLogs').put(row);
+  await txDone(tx);
+  return row;
+}
+
+export async function endActiveFast(personId, endAt = Date.now()) {
+  await ensurePersonExists(personId);
+  const endedAt = Number(endAt);
+  if (!Number.isFinite(endedAt) || endedAt <= 0) throw new Error('endAt must be a valid timestamp');
+
+  const active = await getActiveFastForPerson(personId);
+  if (!active) throw new Error('no active fast');
+  if (endedAt <= Number(active.startAt)) throw new Error('endAt must be after startAt');
+
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readwrite');
+  const store = tx.objectStore('fastingLogs');
+  store.put({ ...active, endAt: endedAt });
+  await txDone(tx);
+  return { ...active, endAt: endedAt };
+}
+
+export async function getActiveFastForPerson(personId) {
+  if (!personId) return null;
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readonly');
+  const index = tx.objectStore('fastingLogs').index('byPersonStartAt');
+  const rows = await promisify(index.getAll(IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER])));
+  const active = rows.filter((item) => item && item.endAt == null).sort((a, b) => Number(b.startAt || 0) - Number(a.startAt || 0));
+  return active[0] || null;
+}
+
+export async function getLatestCompletedFastForPerson(personId) {
+  if (!personId) return null;
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readonly');
+  const index = tx.objectStore('fastingLogs').index('byPersonStartAt');
+  const rows = await promisify(index.getAll(IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER])));
+  const completed = rows
+    .filter((item) => item && Number.isFinite(Number(item.startAt)) && Number.isFinite(Number(item.endAt)) && Number(item.endAt) > Number(item.startAt))
+    .sort((a, b) => Number(b.endAt || 0) - Number(a.endAt || 0));
+  return completed[0] || null;
+}
+
+export async function getCompletedFastStreakDays(personId) {
+  if (!personId) return 0;
+  const db = await openDb();
+  const tx = db.transaction('fastingLogs', 'readonly');
+  const index = tx.objectStore('fastingLogs').index('byPersonDateKey');
+  const rows = await promisify(index.getAll(IDBKeyRange.bound([personId, ''], [personId, '\uffff'])));
+  const completedDateKeys = [...new Set(
+    rows
+      .filter((item) => Number.isFinite(Number(item?.startAt)) && Number.isFinite(Number(item?.endAt)) && Number(item.endAt) > Number(item.startAt))
+      .map((item) => item.dateKey)
+      .filter((v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v))
+  )].sort((a, b) => b.localeCompare(a));
+
+  if (!completedDateKeys.length) return 0;
+  let streak = 1;
+  for (let i = 1; i < completedDateKeys.length; i += 1) {
+    const prev = new Date(`${completedDateKeys[i - 1]}T00:00:00`);
+    const curr = new Date(`${completedDateKeys[i]}T00:00:00`);
+    const diffDays = Math.round((prev.getTime() - curr.getTime()) / 86400000);
+    if (diffDays !== 1) break;
+    streak += 1;
+  }
+  return streak;
+}
+
 export async function getMealTemplates() {
   const db = await openDb();
   const tx = db.transaction('mealTemplates', 'readonly');
@@ -557,6 +821,98 @@ export async function deleteMealTemplate(id) {
   const tx = db.transaction('mealTemplates', 'readwrite');
   tx.objectStore('mealTemplates').delete(id);
   await txDone(tx);
+}
+
+export async function getRecipes() {
+  const db = await openDb();
+  const tx = db.transaction('recipes', 'readonly');
+  const store = tx.objectStore('recipes');
+  const hasUpdatedAtIndex = store.indexNames.contains('byUpdatedAt');
+  const rows = hasUpdatedAtIndex ? await promisify(store.index('byUpdatedAt').getAll()) : await promisify(store.getAll());
+  return rows.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+}
+
+export async function getRecipe(id) {
+  if (!id) return null;
+  const db = await openDb();
+  const tx = db.transaction('recipes', 'readonly');
+  return promisify(tx.objectStore('recipes').get(id));
+}
+
+export async function upsertRecipe(recipe) {
+  const name = String(recipe?.name || '').trim();
+  if (!name || name.length > 60) throw new Error('Recipe name must be 1-60 characters');
+  const servingsDefault = Number(recipe?.servingsDefault);
+  if (!Number.isFinite(servingsDefault) || servingsDefault <= 0) throw new Error('Servings must be positive');
+
+  const normalizedItems = (recipe?.items || []).map(normalizeRecipeItem).filter(Boolean);
+  if (!normalizedItems.length) throw new Error('Recipe must contain at least one valid item');
+
+  const derived = computeRecipeDerived(normalizedItems, servingsDefault);
+  if (!Number.isFinite(derived.totalGrams) || derived.totalGrams <= 0) throw new Error('Recipe total grams must be positive');
+
+  const db = await openDb();
+  const tx = db.transaction('recipes', 'readwrite');
+  const store = tx.objectStore('recipes');
+  const id = recipe?.id || createId();
+  const existing = recipe?.id ? await promisify(store.get(recipe.id)) : null;
+  const now = Date.now();
+  const row = {
+    id,
+    name,
+    createdAt: Number(existing?.createdAt || recipe?.createdAt || now),
+    updatedAt: now,
+    servingsDefault,
+    items: normalizedItems,
+    derived
+  };
+  store.put(row);
+  await txDone(tx);
+  return row;
+}
+
+export async function logRecipe({ personId, date, time, recipeId, servings = 1 }) {
+  if (!personId) throw new Error('personId is required');
+  if (!date) throw new Error('date is required');
+  if (!recipeId) throw new Error('recipeId is required');
+  const servingsNum = Number(servings);
+  if (!Number.isFinite(servingsNum) || servingsNum <= 0) throw new Error('servings must be positive');
+
+  const recipe = await getRecipe(recipeId);
+  if (!recipe) throw new Error('Recipe not found');
+  const ratio = servingsNum / Number(recipe.servingsDefault || 1);
+  const round = (v) => Math.round(Number(v || 0) * ratio * 10) / 10;
+
+  const grams = Math.round(Number(recipe.derived?.totalGrams || 0) * ratio * 10) / 10;
+  const entry = {
+    id: createId(),
+    personId,
+    date,
+    time: String(time || new Date().toTimeString().slice(0, 5)),
+    foodId: `recipe:${recipe.id}`,
+    foodName: recipe.name,
+    amountGrams: grams,
+    kcal: round(recipe.derived?.total?.kcal),
+    p: round(recipe.derived?.total?.protein),
+    c: round(recipe.derived?.total?.carbs),
+    f: round(recipe.derived?.total?.fat),
+    source: `Recipe · ${recipe.name}`,
+    createdAt: Date.now(),
+    recentItem: {
+      foodId: `recipe:${recipe.id}`,
+      label: recipe.name,
+      nutrition: {
+        kcal100g: Number(recipe.derived?.per100g?.kcal || 0),
+        p100g: Number(recipe.derived?.per100g?.protein || 0),
+        c100g: Number(recipe.derived?.per100g?.carbs || 0),
+        f100g: Number(recipe.derived?.per100g?.fat || 0)
+      },
+      pieceGramHint: null,
+      sourceType: 'recipe'
+    }
+  };
+
+  return addEntry(entry);
 }
 
 export async function logMealTemplate({ personId, date, time, templateId }) {
@@ -670,6 +1026,7 @@ export async function toggleFavorite(personId, favoriteItem) {
       nutrition: favoriteItem.nutrition,
       sourceType: favoriteItem.sourceType,
       pieceGramHint: favoriteItem.pieceGramHint ?? null,
+      imageThumbUrl: favoriteItem.imageThumbUrl || null,
       createdAt: Date.now()
     });
   }
@@ -709,6 +1066,23 @@ export async function getLastPortion(lastPortionKey) {
   return row?.value ?? null;
 }
 
+export async function getDashboardLayout(personId) {
+  if (!personId) return null;
+  const db = await openDb();
+  const tx = db.transaction('meta', 'readonly');
+  const row = await promisify(tx.objectStore('meta').get(`dashboardLayout:${personId}`));
+  return row?.value ?? null;
+}
+
+export async function upsertDashboardLayout(personId, layout) {
+  if (!personId) throw new Error('personId is required');
+  const db = await openDb();
+  const tx = db.transaction('meta', 'readwrite');
+  tx.objectStore('meta').put({ key: `dashboardLayout:${personId}`, value: layout });
+  await txDone(tx);
+  return layout;
+}
+
 
 function uniqueById(items, idKey = 'id') {
   const map = new Map();
@@ -721,9 +1095,9 @@ function uniqueById(items, idKey = 'id') {
 
 export async function exportAllData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs'], 'readonly');
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods'], 'readonly');
 
-  const [persons, entries, productsCache, favorites, recents, weightLogs, waterLogs, exerciseLogs] = await Promise.all([
+  const [persons, entries, productsCache, favorites, recents, weightLogs, waterLogs, exerciseLogs, fastingLogs, mealTemplates, recipes, goalPeriods] = await Promise.all([
     promisify(tx.objectStore('persons').getAll()),
     promisify(tx.objectStore('entries').getAll()),
     promisify(tx.objectStore('productsCache').getAll()),
@@ -731,7 +1105,11 @@ export async function exportAllData() {
     promisify(tx.objectStore('recents').getAll()),
     promisify(tx.objectStore('weightLogs').getAll()),
     promisify(tx.objectStore('waterLogs').getAll()),
-    promisify(tx.objectStore('exerciseLogs').getAll())
+    promisify(tx.objectStore('exerciseLogs').getAll()),
+    promisify(tx.objectStore('fastingLogs').getAll()),
+    promisify(tx.objectStore('mealTemplates').getAll()),
+    promisify(tx.objectStore('recipes').getAll()),
+    promisify(tx.objectStore('goalPeriods').getAll())
   ]);
 
   return {
@@ -744,15 +1122,19 @@ export async function exportAllData() {
     recents,
     weightLogs,
     waterLogs,
-    exerciseLogs
+    exerciseLogs,
+    fastingLogs,
+    mealTemplates,
+    recipes,
+    goalPeriods
   };
 }
 
 export async function importAllData(payload) {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'meta'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'], 'readwrite');
 
-  const storesToReset = ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs'];
+  const storesToReset = ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods'];
   storesToReset.forEach((storeName) => tx.objectStore(storeName).clear());
 
   const persons = uniqueById(payload.persons || []);
@@ -763,6 +1145,10 @@ export async function importAllData(payload) {
   const weightLogs = [];
   const waterLogs = uniqueById(payload.waterLogs || []);
   const exerciseLogs = uniqueById(payload.exerciseLogs || []);
+  const fastingLogs = uniqueById(payload.fastingLogs || []);
+  const mealTemplates = uniqueById(payload.mealTemplates || []);
+  const recipes = uniqueById(payload.recipes || []);
+  const goalPeriods = uniqueById(payload.goalPeriods || []);
   const weightByPersonDate = new Map();
   for (const row of payload.weightLogs || []) {
     const cleaned = sanitizeWeightLog(row);
@@ -779,6 +1165,10 @@ export async function importAllData(payload) {
   weightLogs.forEach((item) => tx.objectStore('weightLogs').put(item));
   waterLogs.forEach((item) => tx.objectStore('waterLogs').put(item));
   exerciseLogs.forEach((item) => tx.objectStore('exerciseLogs').put(item));
+  fastingLogs.forEach((item) => tx.objectStore('fastingLogs').put(item));
+  mealTemplates.forEach((item) => tx.objectStore('mealTemplates').put(item));
+  recipes.forEach((item) => tx.objectStore('recipes').put(item));
+  goalPeriods.forEach((item) => tx.objectStore('goalPeriods').put(item));
 
   tx.objectStore('meta').put({ key: 'lastImportAt', value: new Date().toISOString() });
 
@@ -791,14 +1181,18 @@ export async function importAllData(payload) {
     recents: recents.length,
     weightLogs: weightLogs.length,
     waterLogs: waterLogs.length,
-    exerciseLogs: exerciseLogs.length
+    exerciseLogs: exerciseLogs.length,
+    fastingLogs: fastingLogs.length,
+    mealTemplates: mealTemplates.length,
+    recipes: recipes.length,
+    goalPeriods: goalPeriods.length
   };
 }
 
 export async function deleteAllData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'meta'], 'readwrite');
-  ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'meta'].forEach((storeName) => {
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'], 'readwrite');
+  ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'].forEach((storeName) => {
     tx.objectStore(storeName).clear();
   });
   await txDone(tx);
