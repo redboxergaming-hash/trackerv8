@@ -612,6 +612,47 @@ export function renderDashboardEmpty() {
   el('entriesTableContainer').innerHTML = '';
 }
 
+
+
+export function renderAuthStatus(auth = {}, options = {}) {
+  const statusLine = el('authStatusLine');
+  const msg = el('authMessage');
+  const signOutBtn = el('authSignOutBtn');
+  const emailInput = el('authEmailInput');
+  const emailBtn = el('authEmailSignInBtn');
+  const googleBtn = el('authGoogleSignInBtn');
+  const pullCloudBtn = el('pullPersonsCloudBtn');
+  const pushCloudBtn = el('pushPersonsCloudBtn');
+  const pullEntriesBtn = el('pullEntriesCloudBtn');
+  const pushEntriesBtn = el('pushEntriesCloudBtn');
+
+  if (!statusLine || !msg || !signOutBtn || !emailInput || !emailBtn || !googleBtn) return;
+
+  const isSignedIn = Boolean(auth?.userId);
+  const configured = options.configured !== false;
+
+  statusLine.textContent = isSignedIn
+    ? `Signed in as ${auth?.email || auth.userId}`
+    : 'Signed out';
+
+  signOutBtn.hidden = !isSignedIn;
+  emailInput.disabled = !configured || isSignedIn;
+  emailBtn.disabled = !configured || isSignedIn;
+  googleBtn.disabled = !configured;
+  if (pullCloudBtn) pullCloudBtn.disabled = !configured || !isSignedIn;
+  if (pushCloudBtn) pushCloudBtn.disabled = !configured || !isSignedIn;
+  if (pullEntriesBtn) pullEntriesBtn.disabled = !configured || !isSignedIn;
+  if (pushEntriesBtn) pushEntriesBtn.disabled = !configured || !isSignedIn;
+
+  if (!configured) {
+    msg.textContent = 'Cloud auth is not configured in this environment.';
+  } else if (options.message) {
+    msg.textContent = options.message;
+  } else {
+    msg.textContent = '';
+  }
+}
+
 export function renderSettingsPersons(persons) {
   const container = el('settingsPersons');
   if (!persons.length) {

@@ -295,6 +295,35 @@
         <section id="screen-settings" class="screen" aria-labelledby="settingsTitle">
           <h2 id="settingsTitle">Settings · Persons</h2>
 
+
+
+          <section class="card form-grid" aria-labelledby="accountTitle">
+            <h3 id="accountTitle">Account</h3>
+            <p id="authStatusLine" class="muted">Signed out</p>
+            <div class="row-actions">
+              <button type="button" id="authGoogleSignInBtn" class="secondary">Sign in with Google</button>
+            </div>
+            <div class="inline-controls">
+              <label>Email
+                <input id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+              </label>
+              <button type="button" id="authEmailSignInBtn" class="secondary">Send magic link</button>
+            </div>
+            <div class="row-actions">
+              <button type="button" id="authSignOutBtn" class="secondary" hidden>Sign out</button>
+            </div>
+            <div class="row-actions">
+              <button type="button" id="pullPersonsCloudBtn" class="secondary">Pull persons from cloud</button>
+              <button type="button" id="pushPersonsCloudBtn" class="secondary">Push persons to cloud</button>
+            </div>
+            <div class="row-actions">
+              <button type="button" id="pullEntriesCloudBtn" class="secondary">Pull entries from cloud (30d)</button>
+              <button type="button" id="pushEntriesCloudBtn" class="secondary">Push entries to cloud (30d)</button>
+            </div>
+            <p id="authMessage" class="muted tiny"></p>
+            <p id="cloudSyncMessage" class="muted tiny"></p>
+          </section>
+
           <form id="personForm" class="card form-grid">
             <input id="personId" type="hidden" />
             <label>

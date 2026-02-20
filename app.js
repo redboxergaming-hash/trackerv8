@@ -4,6 +4,8 @@ import { lookupOpenFoodFacts, searchOpenFoodFacts } from './offclient.js';
 import { parseLabelText, scanLabel } from './labelscan.js';
 import { startBarcodeScanner, stopBarcodeScanner } from './scanner.js';
 import { drawWeeklyAnalyticsChart } from './analyticschart.js';
+import { getSession, isSupabaseConfigured, onAuthStateChange, signInWithEmailOtp, signInWithGoogle, signOutAuth } from './supabaseClient.js';
+import { listEntries as listCloudEntries, listPersons as listCloudPersons, upsertEntry as upsertCloudEntry, upsertPerson as upsertCloudPerson } from './cloudStore.js';
 import {
   addEntry,
   deleteAllData,
@@ -11,6 +13,7 @@ import {
   exportAllData,
   getCachedProduct,
   getEntriesForPersonDate,
+  getEntriesForPersonDateRange,
   getLoggedDatesByPerson,
   getFavorites,
   getLastPortion,
@@ -27,6 +30,9 @@ import {
   seedSampleData,
   toggleFavorite,
   upsertPerson,
+  setOnEntrySavedHook,
+  getEntryById,
+  upsertEntryFromCloud,
   getMealTemplates,
   upsertMealTemplate,
   logMealTemplate,
@@ -92,7 +98,8 @@ import {
   renderRecipeSearchResults,
   openRecipeDialog,
   closeRecipeDialog,
-  renderGoalPeriods
+  renderGoalPeriods,
+  renderAuthStatus
 } from './ui.js';
 
 const CHATGPT_PHOTO_PROMPT = `Look at this meal photo. List the foods you can clearly identify.
@@ -311,7 +318,10 @@ const state = {
   recipes: [],
   recipeDraft: { id: null, name: '', servingsDefault: 1, items: [] },
   recipePickerOpen: false,
-  goalPeriodsByPerson: {}
+  goalPeriodsByPerson: {},
+  auth: { userId: null, email: null },
+  authMessage: '',
+  cloudSyncMessage: ''
 };
 
 
@@ -838,6 +848,9 @@ async function loadAndRender() {
   renderNutritionPersonPicker(state.persons, state.selectedPersonId);
   setNutritionDefaultDate(state.selectedDate);
   renderSettingsPersons(state.persons);
+  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+  const cloudSyncMessageEl = document.getElementById('cloudSyncMessage');
+  if (cloudSyncMessageEl) cloudSyncMessageEl.textContent = state.cloudSyncMessage || '';
   document.querySelectorAll('#genericCategoryFilters button[data-category]').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.category === state.selectedGenericCategory);
   });
@@ -1659,6 +1672,254 @@ async function handleDeleteMealTemplate(templateId) {
   await loadAndRender();
 }
 
+
+async function initAuthBootstrap() {
+  const session = await getSession();
+  const user = session?.user || null;
+  state.auth = {
+    userId: user?.id || null,
+    email: user?.email || null
+  };
+
+  if (state.auth.userId) {
+    console.log(`AUTH: signed-in userId=${state.auth.userId}`);
+    await maybePullPersonsFromCloudOnSignIn();
+  } else {
+    console.log('AUTH: signed-out');
+  }
+
+  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+
+  onAuthStateChange((nextSession) => {
+    const nextUser = nextSession?.user || null;
+    state.auth = {
+      userId: nextUser?.id || null,
+      email: nextUser?.email || null
+    };
+    if (state.auth.userId) {
+      console.log(`AUTH: signed-in userId=${state.auth.userId}`);
+      maybePullPersonsFromCloudOnSignIn().then(() => loadAndRender());
+    } else {
+      console.log('AUTH: signed-out');
+    }
+    renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+  });
+}
+
+
+async function handleAuthGoogleSignIn() {
+  console.log('AUTH UI: google-sign-in click');
+  state.authMessage = '';
+  if (!isSupabaseConfigured()) {
+    state.authMessage = 'Cloud auth is not configured in this environment.';
+    renderAuthStatus(state.auth, { configured: false, message: state.authMessage });
+    return;
+  }
+  const { error } = await signInWithGoogle();
+  if (error) {
+    state.authMessage = `Google sign-in failed: ${error.message}`;
+  } else {
+    state.authMessage = 'Opening Google sign-in...';
+  }
+  renderAuthStatus(state.auth, { configured: true, message: state.authMessage });
+}
+
+async function handleAuthEmailSignIn() {
+  console.log('AUTH UI: email-sign-in click');
+  const email = String(document.getElementById('authEmailInput')?.value || '').trim();
+  state.authMessage = '';
+  if (!email) {
+    state.authMessage = 'Please enter an email address.';
+    renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+    return;
+  }
+  if (!isSupabaseConfigured()) {
+    state.authMessage = 'Cloud auth is not configured in this environment.';
+    renderAuthStatus(state.auth, { configured: false, message: state.authMessage });
+    return;
+  }
+
+  const { error } = await signInWithEmailOtp(email);
+  if (error) {
+    state.authMessage = `Email sign-in failed: ${error.message}`;
+  } else {
+    state.authMessage = 'Magic link sent. Check your email.';
+  }
+  renderAuthStatus(state.auth, { configured: true, message: state.authMessage });
+}
+
+async function handleAuthSignOut() {
+  console.log('AUTH UI: sign-out click');
+  state.authMessage = '';
+  const { error } = await signOutAuth();
+  if (error) {
+    state.authMessage = `Sign out failed: ${error.message}`;
+  } else {
+    state.authMessage = 'Signed out.';
+  }
+  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+}
+
+async function maybePullPersonsFromCloudOnSignIn() {
+  if (!state.auth.userId) return;
+
+  const localPersons = await getPersons();
+  if (localPersons.length) {
+    console.log('CLOUD: available, local not empty: skipping auto-merge');
+    return;
+  }
+
+  const { data, error } = await listCloudPersons(state.auth.userId);
+  if (error) {
+    console.error('CLOUD: failed to list persons', error);
+    state.cloudSyncMessage = `Cloud pull failed: ${error.message}`;
+    return;
+  }
+
+  for (const person of data) {
+    await upsertPerson(person);
+  }
+  state.cloudSyncMessage = data.length
+    ? `Pulled ${data.length} person(s) from cloud.`
+    : 'No cloud persons found.';
+  console.log(`CLOUD: pull completed count=${data.length}`);
+}
+
+async function handlePullPersonsFromCloud() {
+  state.cloudSyncMessage = '';
+  if (!isSupabaseConfigured() || !state.auth.userId) {
+    state.cloudSyncMessage = 'Sign in with cloud auth to pull persons.';
+    console.log('CLOUD: manual pull blocked (not signed in/configured)');
+    await loadAndRender();
+    return;
+  }
+
+  const { data, error } = await listCloudPersons(state.auth.userId);
+  if (error) {
+    state.cloudSyncMessage = `Cloud pull failed: ${error.message}`;
+  } else {
+    for (const person of data) {
+      await upsertPerson(person);
+    }
+    state.cloudSyncMessage = `Pulled ${data.length} person(s) from cloud.`;
+    console.log(`CLOUD: manual pull count=${data.length}`);
+  }
+  await loadAndRender();
+}
+
+async function handlePushPersonsToCloud() {
+  state.cloudSyncMessage = '';
+  if (!isSupabaseConfigured() || !state.auth.userId) {
+    state.cloudSyncMessage = 'Sign in with cloud auth to push persons.';
+    console.log('CLOUD: manual push blocked (not signed in/configured)');
+    await loadAndRender();
+    return;
+  }
+
+  const localPersons = await getPersons();
+  let pushed = 0;
+  for (const person of localPersons) {
+    const { error } = await upsertCloudPerson(state.auth.userId, person);
+    if (error) {
+      state.cloudSyncMessage = `Cloud push failed: ${error.message}`;
+      console.error('CLOUD: push failed', error);
+      await loadAndRender();
+      return;
+    }
+    pushed += 1;
+  }
+
+  state.cloudSyncMessage = `Pushed ${pushed} person(s) to cloud.`;
+  console.log(`CLOUD: manual push count=${pushed}`);
+  await loadAndRender();
+}
+
+function isoDateDaysAgo(baseDate, daysAgo) {
+  const d = new Date(`${baseDate}T00:00:00`);
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
+async function handlePullEntriesFromCloud() {
+  state.cloudSyncMessage = '';
+  if (!isSupabaseConfigured() || !state.auth.userId) {
+    state.cloudSyncMessage = 'Sign in with cloud auth to pull entries.';
+    console.log('CLOUD: manual pull entries blocked (not signed in/configured)');
+    await loadAndRender();
+    return;
+  }
+
+  const selectedPersonId = state.selectedPersonId;
+  if (!selectedPersonId) {
+    state.cloudSyncMessage = 'Select a person before pulling entries.';
+    await loadAndRender();
+    return;
+  }
+
+  const endDate = state.selectedDate || new Date().toISOString().slice(0, 10);
+  const startDate = isoDateDaysAgo(endDate, 29);
+  const { data, error } = await listCloudEntries(state.auth.userId, { personId: selectedPersonId, startDate, endDate, limit: 1000 });
+  if (error) {
+    state.cloudSyncMessage = `Cloud entries pull failed: ${error.message}`;
+    await loadAndRender();
+    return;
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  for (const cloudEntry of data) {
+    const localEntry = await getEntryById(cloudEntry.id);
+    const localUpdatedAt = Number(localEntry?.updatedAt || 0);
+    const cloudUpdatedAt = Number(cloudEntry?.updatedAt || 0);
+    if (localEntry && localUpdatedAt >= cloudUpdatedAt) {
+      skipped += 1;
+      continue;
+    }
+    await upsertEntryFromCloud(cloudEntry);
+    imported += 1;
+  }
+
+  state.cloudSyncMessage = `Pulled entries: imported ${imported}, skipped ${skipped}.`;
+  console.log(`CLOUD: pull entries ok imported=${imported} skipped=${skipped}`);
+  await loadAndRender();
+}
+
+async function handlePushEntriesToCloud() {
+  state.cloudSyncMessage = '';
+  if (!isSupabaseConfigured() || !state.auth.userId) {
+    state.cloudSyncMessage = 'Sign in with cloud auth to push entries.';
+    console.log('CLOUD: manual push entries blocked (not signed in/configured)');
+    await loadAndRender();
+    return;
+  }
+
+  const selectedPersonId = state.selectedPersonId;
+  if (!selectedPersonId) {
+    state.cloudSyncMessage = 'Select a person before pushing entries.';
+    await loadAndRender();
+    return;
+  }
+
+  const endDate = state.selectedDate || new Date().toISOString().slice(0, 10);
+  const startDate = isoDateDaysAgo(endDate, 29);
+  const localEntries = await getEntriesForPersonDateRange(selectedPersonId, startDate, endDate);
+  let pushed = 0;
+  for (const entry of localEntries) {
+    const { error } = await upsertCloudEntry(state.auth.userId, entry);
+    if (error) {
+      state.cloudSyncMessage = `Cloud entries push failed: ${error.message}`;
+      console.error('CLOUD: push entries failed', error);
+      await loadAndRender();
+      return;
+    }
+    pushed += 1;
+  }
+
+  state.cloudSyncMessage = `Pushed ${pushed} entries to cloud.`;
+  console.log(`CLOUD: push entries ok count=${pushed}`);
+  await loadAndRender();
+}
+
 async function registerServiceWorker() {
 
   if (!('serviceWorker' in navigator)) return;
@@ -2079,6 +2340,14 @@ function wireEvents() {
   document.getElementById('confirmPortionBtn').addEventListener('click', logActiveFood);
   document.getElementById('cancelPortionBtn').addEventListener('click', closePortionDialog);
 
+  document.getElementById('authGoogleSignInBtn').addEventListener('click', handleAuthGoogleSignIn);
+  document.getElementById('authEmailSignInBtn').addEventListener('click', handleAuthEmailSignIn);
+  document.getElementById('authSignOutBtn').addEventListener('click', handleAuthSignOut);
+  document.getElementById('pullPersonsCloudBtn').addEventListener('click', handlePullPersonsFromCloud);
+  document.getElementById('pushPersonsCloudBtn').addEventListener('click', handlePushPersonsToCloud);
+  document.getElementById('pullEntriesCloudBtn').addEventListener('click', handlePullEntriesFromCloud);
+  document.getElementById('pushEntriesCloudBtn').addEventListener('click', handlePushEntriesToCloud);
+
   document.getElementById('personForm').addEventListener('submit', handlePersonSave);
   document.getElementById('cancelEditBtn').addEventListener('click', () => fillPersonForm(null));
   document.getElementById('settingsPersons').addEventListener('click', handleSettingsActions);
@@ -2153,6 +2422,16 @@ function wireEvents() {
 }
 
 await registerServiceWorker();
+setOnEntrySavedHook(async (entry) => {
+  if (!isSupabaseConfigured() || !state.auth.userId) return;
+  const { error } = await upsertCloudEntry(state.auth.userId, entry);
+  if (error) {
+    console.error('CLOUD: upsert entry failed', error);
+    return;
+  }
+  console.log(`CLOUD: upsert entry ok id=${entry.id}`);
+});
+await initAuthBootstrap();
 wireEvents();
 fillPersonForm(null);
 renderIosInstallBanner();

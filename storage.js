@@ -469,6 +469,12 @@ export async function getEntriesForPersonDate(personId, date) {
   return promisify(idx.getAll([personId, date]));
 }
 
+let onEntrySavedHook = null;
+
+export function setOnEntrySavedHook(handler) {
+  onEntrySavedHook = typeof handler === 'function' ? handler : null;
+}
+
 export async function getLoggedDatesByPerson(personId) {
   if (!personId) return [];
   const db = await openDb();
@@ -479,7 +485,7 @@ export async function getLoggedDatesByPerson(personId) {
   return [...uniqueDates].sort((a, b) => b.localeCompare(a));
 }
 
-export async function addEntry(entry) {
+export async function addEntry(entry, options = {}) {
   const numericFields = ['amountGrams', 'kcal', 'p', 'c', 'f'];
   const cleaned = { ...entry };
   for (const field of numericFields) {
@@ -495,7 +501,8 @@ export async function addEntry(entry) {
   const stored = {
     ...cleaned,
     id: entry.id || crypto.randomUUID(),
-    createdAt: entry.createdAt || Date.now()
+    createdAt: entry.createdAt || Date.now(),
+    updatedAt: entry.updatedAt || Date.now()
   };
   tx.objectStore('entries').put(stored);
 
@@ -516,9 +523,36 @@ export async function addEntry(entry) {
   }
 
   await txDone(tx);
+  if (!options.skipHook && onEntrySavedHook) {
+    try {
+      await onEntrySavedHook(stored);
+    } catch (error) {
+      console.error('ENTRY_HOOK: onEntrySavedHook failed', error);
+    }
+  }
   return stored;
 }
 
+
+export async function getEntryById(entryId) {
+  if (!entryId) return null;
+  const db = await openDb();
+  const tx = db.transaction('entries', 'readonly');
+  return promisify(tx.objectStore('entries').get(entryId));
+}
+
+export async function getEntriesForPersonDateRange(personId, startDate, endDate) {
+  if (!personId || !startDate || !endDate) return [];
+  const db = await openDb();
+  const tx = db.transaction('entries', 'readonly');
+  const idx = tx.objectStore('entries').index('byPersonDate');
+  const rows = await promisify(idx.getAll(IDBKeyRange.bound([personId, startDate], [personId, endDate])));
+  return rows.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+}
+
+export async function upsertEntryFromCloud(entry) {
+  return addEntry(entry, { skipHook: true });
+}
 
 function normalizeGoalValue(value) {
   const n = Number(value);
