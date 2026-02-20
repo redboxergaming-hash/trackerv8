@@ -151,3 +151,60 @@ export async function deleteEntry(userId, entryId) {
 
   return { error: error || null };
 }
+
+
+export async function uploadFoodImage(userId, foodId, file) {
+  if (!supabase) return { data: null, error: new Error('Supabase is not configured.') };
+  if (!userId) return { data: null, error: new Error('userId is required.') };
+  if (!foodId) return { data: null, error: new Error('foodId is required.') };
+  if (!file) return { data: null, error: new Error('file is required.') };
+
+  const path = `${String(userId)}/${String(foodId)}.jpg`;
+  const { error: uploadError } = await supabase.storage
+    .from('food-images')
+    .upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' });
+  if (uploadError) return { data: null, error: uploadError };
+
+  const { data } = supabase.storage.from('food-images').getPublicUrl(path);
+  return { data: { path, url: data?.publicUrl || '' }, error: null };
+}
+
+export async function saveFoodImageUrl(userId, foodId, url) {
+  if (!supabase) return { data: null, error: new Error('Supabase is not configured.') };
+  if (!userId) return { data: null, error: new Error('userId is required.') };
+  if (!foodId) return { data: null, error: new Error('foodId is required.') };
+
+  const payload = {
+    user_id: String(userId),
+    food_id: String(foodId),
+    image_url: String(url || '')
+  };
+  const { data, error } = await supabase
+    .from('food_images')
+    .upsert(payload, { onConflict: 'user_id,food_id' })
+    .select('*')
+    .single();
+  return { data: data || null, error: error || null };
+}
+
+export async function upsertProductPointer(userId, product = {}) {
+  if (!supabase) return { data: null, error: new Error('Supabase is not configured.') };
+  if (!userId) return { data: null, error: new Error('userId is required.') };
+  if (!product?.barcode) return { data: null, error: new Error('barcode is required.') };
+
+  const payload = {
+    user_id: String(userId),
+    barcode: String(product.barcode),
+    product_name: String(product.productName || ''),
+    image_url: String(product.imageThumbUrl || product.imageUrl || ''),
+    source: String(product.source || 'Open Food Facts'),
+    fetched_at: Number.isFinite(Number(product.fetchedAt)) ? new Date(Number(product.fetchedAt)).toISOString() : new Date().toISOString()
+  };
+
+  const { data, error } = await supabase
+    .from('product_pointers')
+    .upsert(payload, { onConflict: 'user_id,barcode' })
+    .select('*')
+    .single();
+  return { data: data || null, error: error || null };
+}

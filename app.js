@@ -5,7 +5,7 @@ import { parseLabelText, scanLabel } from './labelscan.js';
 import { startBarcodeScanner, stopBarcodeScanner } from './scanner.js';
 import { drawWeeklyAnalyticsChart } from './analyticschart.js';
 import { getSession, isSupabaseConfigured, onAuthStateChange, signInWithEmailOtp, signInWithGoogle, signOutAuth } from './supabaseClient.js';
-import { listEntries as listCloudEntries, listPersons as listCloudPersons, upsertEntry as upsertCloudEntry, upsertPerson as upsertCloudPerson } from './cloudStore.js';
+import { listEntries as listCloudEntries, listPersons as listCloudPersons, saveFoodImageUrl, uploadFoodImage, upsertEntry as upsertCloudEntry, upsertPerson as upsertCloudPerson, upsertProductPointer } from './cloudStore.js';
 import {
   addEntry,
   deleteAllData,
@@ -31,6 +31,7 @@ import {
   toggleFavorite,
   upsertPerson,
   setOnEntrySavedHook,
+  setOnProductCacheSavedHook,
   getEntryById,
   upsertEntryFromCloud,
   getMealTemplates,
@@ -170,10 +171,12 @@ function setCustomImagePreview(src) {
     img.hidden = true;
     img.removeAttribute('src');
     img.dataset.thumb = '';
+    img.dataset.full = '';
     return;
   }
   img.src = src;
   img.dataset.thumb = src;
+  img.dataset.full = src;
   img.hidden = false;
 }
 
@@ -321,7 +324,8 @@ const state = {
   goalPeriodsByPerson: {},
   auth: { userId: null, email: null },
   authMessage: '',
-  cloudSyncMessage: ''
+  cloudSyncMessage: '',
+  customImageFile: null
 };
 
 
@@ -1160,9 +1164,25 @@ async function handleCustomFoodSubmit(e) {
 
   const selectedSource = document.getElementById('customSource').value || 'custom';
   const imageThumbUrl = document.getElementById('customImagePreview')?.dataset?.thumb || '';
+  const foodId = `custom:${label.toLowerCase().replace(/\s+/g, '_')}`;
+
+  if (state.customImageFile && isSupabaseConfigured() && state.auth.userId) {
+    const upload = await uploadFoodImage(state.auth.userId, foodId, state.customImageFile);
+    if (upload.error) {
+      console.error('CLOUD: upload food image failed', upload.error);
+    } else {
+      console.log(`CLOUD: upload food image ok path=${upload.data?.path || ''}`);
+      const save = await saveFoodImageUrl(state.auth.userId, foodId, upload.data?.url || '');
+      if (save.error) {
+        console.error('CLOUD: save food image url failed', save.error);
+      }
+    }
+  } else if (state.customImageFile) {
+    console.log('CLOUD: upload food image skipped (not signed in/configured)');
+  }
 
   await openPortionForItem({
-    foodId: `custom:${label.toLowerCase().replace(/\s+/g, '_')}`,
+    foodId,
     label,
     nutrition,
     pieceGramHint: null,
@@ -2230,15 +2250,18 @@ function wireEvents() {
   document.getElementById('customImageInput').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     if (!file) {
+      state.customImageFile = null;
       setCustomImagePreview('');
       return;
     }
     try {
       const thumb = await createImageThumbnailDataUrl(file, 256);
+      state.customImageFile = file;
       setCustomImagePreview(thumb);
     } catch (error) {
       console.error(error);
       window.alert('Could not process image. Please try another file.');
+      state.customImageFile = null;
       setCustomImagePreview('');
       e.target.value = '';
     }
@@ -2284,6 +2307,7 @@ function wireEvents() {
   });
 
   document.getElementById('customFoodForm').addEventListener('reset', () => {
+    state.customImageFile = null;
     setCustomImagePreview('');
     setCustomLabelAutoFillBadge(false);
     setCustomLabelScanStatus('', false);
@@ -2430,6 +2454,15 @@ setOnEntrySavedHook(async (entry) => {
     return;
   }
   console.log(`CLOUD: upsert entry ok id=${entry.id}`);
+});
+setOnProductCacheSavedHook(async (product) => {
+  if (!isSupabaseConfigured() || !state.auth.userId) return;
+  const { error } = await upsertProductPointer(state.auth.userId, product);
+  if (error) {
+    console.error('CLOUD: upsert product pointer failed', error);
+    return;
+  }
+  console.log(`CLOUD: upsert product pointer ok barcode=${product.barcode}`);
 });
 await initAuthBootstrap();
 wireEvents();

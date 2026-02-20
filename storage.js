@@ -470,9 +470,14 @@ export async function getEntriesForPersonDate(personId, date) {
 }
 
 let onEntrySavedHook = null;
+let onProductCacheSavedHook = null;
 
 export function setOnEntrySavedHook(handler) {
   onEntrySavedHook = typeof handler === 'function' ? handler : null;
+}
+
+export function setOnProductCacheSavedHook(handler) {
+  onProductCacheSavedHook = typeof handler === 'function' ? handler : null;
 }
 
 export async function getLoggedDatesByPerson(personId) {
@@ -1239,10 +1244,20 @@ export async function getCachedProduct(barcode) {
   return promisify(tx.objectStore('productsCache').get(barcode));
 }
 
-export async function upsertCachedProduct(product) {
+export async function upsertCachedProduct(product, options = {}) {
+  const row = { ...product };
   const db = await openDb();
   const tx = db.transaction('productsCache', 'readwrite');
-  tx.objectStore('productsCache').put(product);
+  tx.objectStore('productsCache').put(row);
   await txDone(tx);
-  return product;
+
+  if (!options.skipHook && onProductCacheSavedHook) {
+    try {
+      await onProductCacheSavedHook(row);
+    } catch (error) {
+      console.error('PRODUCT_HOOK: onProductCacheSavedHook failed', error);
+    }
+  }
+
+  return row;
 }
