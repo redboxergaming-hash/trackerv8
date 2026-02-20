@@ -28,10 +28,7 @@
         <button data-route="persons" class="tab active">Persons</button>
         <button data-route="dashboard" class="tab">Dashboard</button>
         <button data-route="add" class="tab">Add Entry</button>
-        <button data-route="scan" class="tab">Scan</button>
-        <button data-route="photo" class="tab">Photo</button>
         <button data-route="analytics" class="tab">Analytics</button>
-        <button data-route="nutrition" class="tab">Nutrition</button>
         <button data-route="settings" class="tab">Settings</button>
       </nav>
 
@@ -61,6 +58,15 @@
         <section id="screen-add" class="screen" aria-labelledby="addTitle">
           <h2 id="addTitle">Manual Add</h2>
           <div class="card add-card">
+            <section class="quick-tools">
+              <h3>Quick tools</h3>
+              <div class="row-actions">
+                <button type="button" class="secondary" data-route-jump="scan">Scan barcode</button>
+                <button type="button" class="secondary" data-route-jump="photo">Photo workflow</button>
+                <button type="button" class="secondary" data-route-jump="nutrition">Nutrition overview</button>
+              </div>
+            </section>
+
             <div class="inline-controls">
               <label>
                 Person
@@ -78,6 +84,11 @@
             </section>
 
             <section>
+              <h3>Recipes</h3>
+              <div id="recipesRow" class="meal-templates-row" aria-label="Recipes"></div>
+            </section>
+
+            <section>
               <h3>Favorites</h3>
               <div id="favoriteList" class="suggestions"></div>
             </section>
@@ -87,11 +98,16 @@
               <div id="recentList" class="suggestions"></div>
             </section>
 
+            <div class="search-source-toggle" role="group" aria-label="Search source">
+              <button type="button" class="secondary active" data-search-source="local">Local</button>
+              <button type="button" class="secondary" data-search-source="public">Public (OFF)</button>
+            </div>
+
             <label>
               Search foods
               <input id="foodSearchInput" type="search" placeholder="Search favorites, recent, and built-in foods" />
             </label>
-
+            <p id="publicSearchStatus" class="muted tiny" hidden></p>
 
             <section>
               <h3>Generic categories</h3>
@@ -111,6 +127,18 @@
               <div id="addSuggestions" class="suggestions"></div>
             </section>
 
+            <h3>Quick Add (Macros First)</h3>
+            <form id="quickAddForm" class="form-grid quick-add-grid">
+              <label>Optional label <input id="quickAddName" type="text" placeholder="e.g. Snack" maxlength="80" /></label>
+              <div class="inline-controls">
+                <label>kcal <input id="quickAddKcal" type="number" min="0" step="0.1" inputmode="decimal" /></label>
+                <label>Protein (g) <input id="quickAddP" type="number" min="0" step="0.1" inputmode="decimal" /></label>
+                <label>Carbs (g) <input id="quickAddC" type="number" min="0" step="0.1" inputmode="decimal" /></label>
+                <label>Fat (g) <input id="quickAddF" type="number" min="0" step="0.1" inputmode="decimal" /></label>
+              </div>
+              <button type="submit">Save quick add</button>
+            </form>
+
             <h3>Quick custom add</h3>
             <form id="customFoodForm" class="form-grid">
               <label>Name <input id="customName" type="text" placeholder="e.g. Homemade sandwich" required /></label>
@@ -120,6 +148,38 @@
                 <label>C/100g <input id="customC" type="number" step="0.1" min="0" required /></label>
                 <label>F/100g <input id="customF" type="number" step="0.1" min="0" required /></label>
               </div>
+              <label>
+                Food image (optional)
+                <input id="customImageInput" type="file" accept="image/*" />
+              </label>
+              <img id="customImagePreview" class="custom-image-preview" alt="Custom food preview" hidden />
+              <div class="row-actions">
+                <button type="button" id="customLabelScanBtn" class="secondary">Scan nutrition label</button>
+                <input id="customLabelImageInput" type="file" accept="image/*" hidden />
+                <span id="customLabelAutoFillBadge" class="tiny muted" hidden>Auto-filled</span>
+              </div>
+              <p id="customLabelScanStatus" class="muted tiny" hidden></p>
+              <details class="custom-label-fallback-details">
+                <summary>Paste label text (fallback)</summary>
+                <label>Label text
+                  <textarea id="customLabelTextInput" rows="5" placeholder="Paste nutrition label text here"></textarea>
+                </label>
+                <div class="row-actions">
+                  <button type="button" id="parseLabelTextBtn" class="secondary">Parse text</button>
+                </div>
+              </details>
+              <details class="custom-micro-details">
+                <summary>Micronutrients (optional)</summary>
+                <div class="goal-global-grid custom-micro-grid">
+                  <label>Fiber (g/100g)<input id="customFiber" type="number" step="0.1" min="0" /></label>
+                  <label>Sugar (g/100g)<input id="customSugar" type="number" step="0.1" min="0" /></label>
+                  <label>Sodium (mg/100g)<input id="customSodium" type="number" step="0.1" min="0" /></label>
+                  <label>Potassium (mg/100g)<input id="customPotassium" type="number" step="0.1" min="0" /></label>
+                  <label>Calcium (mg/100g)<input id="customCalcium" type="number" step="0.1" min="0" /></label>
+                  <label>Iron (mg/100g)<input id="customIron" type="number" step="0.1" min="0" /></label>
+                  <label>Vitamin C (mg/100g)<input id="customVitaminC" type="number" step="0.1" min="0" /></label>
+                </div>
+              </details>
               <label>
                 Source label
                 <select id="customSource">
@@ -235,6 +295,35 @@
         <section id="screen-settings" class="screen" aria-labelledby="settingsTitle">
           <h2 id="settingsTitle">Settings · Persons</h2>
 
+
+
+          <section class="card form-grid" aria-labelledby="accountTitle">
+            <h3 id="accountTitle">Account</h3>
+            <p id="authStatusLine" class="muted">Signed out</p>
+            <div class="row-actions">
+              <button type="button" id="authGoogleSignInBtn" class="secondary">Sign in with Google</button>
+            </div>
+            <div class="inline-controls">
+              <label>Email
+                <input id="authEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+              </label>
+              <button type="button" id="authEmailSignInBtn" class="secondary">Send magic link</button>
+            </div>
+            <div class="row-actions">
+              <button type="button" id="authSignOutBtn" class="secondary" hidden>Sign out</button>
+            </div>
+            <div class="row-actions">
+              <button type="button" id="pullPersonsCloudBtn" class="secondary">Pull persons from cloud</button>
+              <button type="button" id="pushPersonsCloudBtn" class="secondary">Push persons to cloud</button>
+            </div>
+            <div class="row-actions">
+              <button type="button" id="pullEntriesCloudBtn" class="secondary">Pull entries from cloud (30d)</button>
+              <button type="button" id="pushEntriesCloudBtn" class="secondary">Push entries to cloud (30d)</button>
+            </div>
+            <p id="authMessage" class="muted tiny"></p>
+            <p id="cloudSyncMessage" class="muted tiny"></p>
+          </section>
+
           <form id="personForm" class="card form-grid">
             <input id="personId" type="hidden" />
             <label>
@@ -267,6 +356,45 @@
           </form>
 
           <div id="settingsPersons" class="stack"></div>
+
+          <section class="card form-grid" aria-labelledby="goalPeriodsTitle">
+            <h3 id="goalPeriodsTitle">Goals 2.0 · Goal Periods</h3>
+            <form id="goalPeriodForm" class="form-grid">
+              <label>Period name <input id="goalPeriodName" type="text" maxlength="80" placeholder="e.g. Cut Feb" required /></label>
+              <div class="inline-controls">
+                <label>Start <input id="goalPeriodStartDate" type="date" required /></label>
+                <label>End <input id="goalPeriodEndDate" type="date" required /></label>
+              </div>
+              <div class="goal-global-grid">
+                <label>Daily Calories Target<input id="goalDailyKcal" type="number" min="0" step="1" /></label>
+                <label>Daily Protein Target<input id="goalDailyP" type="number" min="0" step="1" /></label>
+                <label>Daily Carbs Target<input id="goalDailyC" type="number" min="0" step="1" /></label>
+                <label>Daily Fat Target<input id="goalDailyF" type="number" min="0" step="1" /></label>
+              </div>
+              <details id="goalAdvancedSchedule" class="goal-advanced-details">
+                <summary>Advanced schedule</summary>
+                <p class="muted tiny">Optional: override targets for specific days.</p>
+                <div class="goal-weekday-grid">
+                  <label>Mon kcal<input id="goalMonKcal" type="number" min="0" step="1" /></label><label>Mon P<input id="goalMonP" type="number" min="0" step="1" /></label><label>Mon C<input id="goalMonC" type="number" min="0" step="1" /></label><label>Mon F<input id="goalMonF" type="number" min="0" step="1" /></label>
+                  <label>Tue kcal<input id="goalTueKcal" type="number" min="0" step="1" /></label><label>Tue P<input id="goalTueP" type="number" min="0" step="1" /></label><label>Tue C<input id="goalTueC" type="number" min="0" step="1" /></label><label>Tue F<input id="goalTueF" type="number" min="0" step="1" /></label>
+                  <label>Wed kcal<input id="goalWedKcal" type="number" min="0" step="1" /></label><label>Wed P<input id="goalWedP" type="number" min="0" step="1" /></label><label>Wed C<input id="goalWedC" type="number" min="0" step="1" /></label><label>Wed F<input id="goalWedF" type="number" min="0" step="1" /></label>
+                  <label>Thu kcal<input id="goalThuKcal" type="number" min="0" step="1" /></label><label>Thu P<input id="goalThuP" type="number" min="0" step="1" /></label><label>Thu C<input id="goalThuC" type="number" min="0" step="1" /></label><label>Thu F<input id="goalThuF" type="number" min="0" step="1" /></label>
+                  <label>Fri kcal<input id="goalFriKcal" type="number" min="0" step="1" /></label><label>Fri P<input id="goalFriP" type="number" min="0" step="1" /></label><label>Fri C<input id="goalFriC" type="number" min="0" step="1" /></label><label>Fri F<input id="goalFriF" type="number" min="0" step="1" /></label>
+                  <label>Sat kcal<input id="goalSatKcal" type="number" min="0" step="1" /></label><label>Sat P<input id="goalSatP" type="number" min="0" step="1" /></label><label>Sat C<input id="goalSatC" type="number" min="0" step="1" /></label><label>Sat F<input id="goalSatF" type="number" min="0" step="1" /></label>
+                  <label>Sun kcal<input id="goalSunKcal" type="number" min="0" step="1" /></label><label>Sun P<input id="goalSunP" type="number" min="0" step="1" /></label><label>Sun C<input id="goalSunC" type="number" min="0" step="1" /></label><label>Sun F<input id="goalSunF" type="number" min="0" step="1" /></label>
+                </div>
+              </details>
+              <button type="submit">Save Goal Period</button>
+            </form>
+            <div id="goalPeriodsList" class="stack"></div>
+          </section>
+
+          <section class="card form-grid" aria-labelledby="dashboardCustomizeTitle">
+            <h3 id="dashboardCustomizeTitle">Dashboard</h3>
+            <p class="muted tiny">Customize dashboard sections for the selected person.</p>
+            <div id="dashboardCustomizeList" class="stack"></div>
+            <p id="dashboardCustomizeStatus" class="muted tiny"></p>
+          </section>
 
           <section class="card form-grid" aria-labelledby="dataToolsTitle">
             <h3 id="dataToolsTitle">Data management</h3>
@@ -319,6 +447,35 @@
         <div class="row-actions">
           <button type="submit" id="saveMealTemplateBtn">Save meal</button>
           <button type="button" id="cancelMealTemplateBtn" class="secondary">Cancel</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="recipeDialog">
+      <h3>Create Recipe</h3>
+      <form id="recipeForm" class="form-grid">
+        <label>
+          Recipe name
+          <input id="recipeName" type="text" maxlength="80" required placeholder="e.g. Chicken Rice Bowl" />
+        </label>
+        <label>
+          Default servings
+          <input id="recipeServingsDefault" type="number" min="1" step="0.5" value="1" required />
+        </label>
+        <div class="row-actions">
+          <button type="button" id="recipeAddItemBtn" class="secondary">Add ingredient</button>
+        </div>
+        <div id="recipePicker" class="meal-template-picker" hidden>
+          <label>
+            Search foods
+            <input id="recipeSearchInput" type="search" placeholder="Search favorites, recents, and built-in foods" />
+          </label>
+          <div id="recipeSearchResults" class="suggestions"></div>
+        </div>
+        <div id="recipeItems" class="stack"></div>
+        <div class="row-actions">
+          <button type="submit" id="saveRecipeBtn">Save recipe</button>
+          <button type="button" id="cancelRecipeBtn" class="secondary">Cancel</button>
         </div>
       </form>
     </dialog>
