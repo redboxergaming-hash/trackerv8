@@ -399,15 +399,20 @@ function renderDashboardSection(sectionKey, context) {
   if (sectionKey === 'caloriesHero') {
     return `<section class="dashboard-hero">
       <article class="hero-card hero-calories">
-        <h3>Calories consumed</h3>
+        <h3>Intake</h3>
         <p class="hero-value">${context.consumedKcal}</p>
         <p class="muted tiny">Goal ${context.person.kcalGoal} kcal</p>
         <div class="macro-track"><div class="macro-fill" style="width:${context.kcalProgress}%"></div></div>
       </article>
-      <article class="hero-card hero-remaining ${context.remainingKcal <= 0 ? 'goal-met' : ''}">
-        <h3>Calories remaining</h3>
-        <p class="hero-value">${context.remainingKcal}</p>
-        <p class="muted tiny">${context.remainingKcal <= 0 ? 'Daily target reached' : 'Keep going'}</p>
+      <article class="hero-card hero-remaining">
+        <h3>Burned</h3>
+        <p class="hero-value">${context.burnedKcal}</p>
+        <p class="muted tiny">Activity calories</p>
+      </article>
+      <article class="hero-card hero-remaining ${context.netKcal <= 0 ? 'goal-met' : ''}">
+        <h3>Net</h3>
+        <p class="hero-value">${context.netKcal}</p>
+        <p class="muted tiny">Intake - Burned</p>
       </article>
     </section>`;
   }
@@ -535,6 +540,8 @@ export function renderDashboard(person, date, entries, options = {}) {
   const consumedKcal = Math.round(totals.kcal);
   const remainingKcal = Math.max(0, Math.round(person.kcalGoal - totals.kcal));
   const kcalProgress = person.kcalGoal > 0 ? Math.min(100, Math.round((totals.kcal / person.kcalGoal) * 100)) : 0;
+  const burnedKcal = Math.round(Number(options.burnedKcal || 0));
+  const netKcal = Math.round(totals.kcal - burnedKcal);
   const macroView = options.macroView || 'consumed';
   const streakDays = Number.isFinite(options.streakDays) ? options.streakDays : 0;
   const layout = normalizeDashboardLayout(options.layout);
@@ -545,6 +552,8 @@ export function renderDashboard(person, date, entries, options = {}) {
     consumedKcal,
     remainingKcal,
     kcalProgress,
+    burnedKcal,
+    netKcal,
     macroView,
     streakDays,
     consistency: options.consistency || { consistencyScore: 0, badges: [] }
@@ -625,6 +634,7 @@ export function renderAuthStatus(auth = {}, options = {}) {
   const pushCloudBtn = el('pushPersonsCloudBtn');
   const pullEntriesBtn = el('pullEntriesCloudBtn');
   const pushEntriesBtn = el('pushEntriesCloudBtn');
+  const syncLine = el('syncStatusLine');
 
   if (!statusLine || !msg || !signOutBtn || !emailInput || !emailBtn || !googleBtn) return;
 
@@ -644,8 +654,14 @@ export function renderAuthStatus(auth = {}, options = {}) {
   if (pullEntriesBtn) pullEntriesBtn.disabled = !configured || !isSignedIn;
   if (pushEntriesBtn) pushEntriesBtn.disabled = !configured || !isSignedIn;
 
+  if (syncLine) {
+    syncLine.textContent = options.lastSyncAt
+      ? `Last sync: ${new Date(options.lastSyncAt).toLocaleString()}`
+      : 'Last sync: not yet';
+  }
+
   if (!configured) {
-    msg.textContent = 'Cloud auth is not configured in this environment.';
+    msg.textContent = 'Cloud auth is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in window.__APP_CONFIG__ (Netlify) to enable sync.';
   } else if (options.message) {
     msg.textContent = options.message;
   } else {

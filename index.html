@@ -51,6 +51,27 @@
               <input id="datePicker" type="date" />
             </label>
           </div>
+          <div class="card form-grid burned-calories-card">
+            <h3>Calories burned (day-specific)</h3>
+            <div class="inline-controls">
+              <label>
+                Burned kcal
+                <input id="burnedCaloriesInput" type="number" min="0" step="1" inputmode="numeric" placeholder="0" />
+              </label>
+              <button type="button" id="saveBurnedCaloriesBtn" class="secondary">Save</button>
+            </div>
+            <details>
+              <summary>Apple Watch / Apple Health import (optional)</summary>
+              <p class="muted tiny">Direct HealthKit access is not available in web PWAs. You can paste exported data from a Shortcut or Apple Health export containing kcal values.</p>
+              <label>Paste JSON or plain number
+                <textarea id="appleHealthImportInput" rows="4" placeholder='e.g. {"activeEnergyKcal": 620} or 620'></textarea>
+              </label>
+              <div class="row-actions">
+                <button type="button" id="importAppleHealthBtn" class="secondary">Import burned kcal</button>
+              </div>
+              <p id="appleHealthImportStatus" class="muted tiny"></p>
+            </details>
+          </div>
           <div id="dashboardSummary" class="summary"></div>
           <div id="entriesTableContainer"></div>
         </section>
@@ -88,15 +109,15 @@
               <div id="recipesRow" class="meal-templates-row" aria-label="Recipes"></div>
             </section>
 
-            <section>
-              <h3>Favorites</h3>
+            <details id="favoritesSection" class="collapsible-section">
+              <summary><h3>Favorites</h3></summary>
               <div id="favoriteList" class="suggestions"></div>
-            </section>
+            </details>
 
-            <section>
-              <h3>Recent items</h3>
+            <details id="recentsSection" class="collapsible-section">
+              <summary><h3>Recent items</h3></summary>
               <div id="recentList" class="suggestions"></div>
-            </section>
+            </details>
 
             <div class="search-source-toggle" role="group" aria-label="Search source">
               <button type="button" class="secondary active" data-search-source="local">Local</button>
@@ -122,10 +143,10 @@
               </div>
             </section>
 
-            <section>
-              <h3>Search results</h3>
+            <details id="searchResultsSection" class="collapsible-section" open>
+              <summary><h3>Search results</h3></summary>
               <div id="addSuggestions" class="suggestions"></div>
-            </section>
+            </details>
 
             <h3>Quick Add (Macros First)</h3>
             <form id="quickAddForm" class="form-grid quick-add-grid">
@@ -322,6 +343,7 @@
             </div>
             <p id="authMessage" class="muted tiny"></p>
             <p id="cloudSyncMessage" class="muted tiny"></p>
+            <p id="syncStatusLine" class="muted tiny">Last sync: not yet</p>
           </section>
 
           <form id="personForm" class="card form-grid">

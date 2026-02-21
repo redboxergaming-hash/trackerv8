@@ -884,3 +884,25 @@ th, td {
   border-color: var(--color-blue-600);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-blue-600) 35%, transparent);
 }
+
+.collapsible-section {
+  border-top: 1px solid rgba(148, 163, 184, 0.3);
+  padding-top: 0.35rem;
+}
+
+.collapsible-section > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.collapsible-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-section > summary h3 {
+  display: inline;
+}
+
+.burned-calories-card {
+  margin-top: 0.75rem;
+}

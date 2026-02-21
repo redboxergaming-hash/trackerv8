@@ -47,6 +47,8 @@ import {
   addExerciseLog,
   getWaterTotalForPersonDate,
   getExerciseTotalForPersonDate,
+  upsertBurnedCalories,
+  getBurnedCaloriesForPersonDate,
   startFasting,
   endActiveFast,
   getActiveFastForPerson,
@@ -325,6 +327,8 @@ const state = {
   auth: { userId: null, email: null },
   authMessage: '',
   cloudSyncMessage: '',
+  lastSyncAt: null,
+  sectionState: { favorites: false, recents: false, searchResults: true },
   customImageFile: null
 };
 
@@ -618,6 +622,67 @@ async function buildInsightMetrics(personId, endDate) {
   return { calorie3d, calorie7d, weight3d, weight7d };
 }
 
+
+const COLLAPSE_STATE_KEY = 'addSectionsCollapsedState';
+
+function loadCollapseState() {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_STATE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return;
+    state.sectionState = {
+      favorites: parsed.favorites !== undefined ? Boolean(parsed.favorites) : state.sectionState.favorites,
+      recents: parsed.recents !== undefined ? Boolean(parsed.recents) : state.sectionState.recents,
+      searchResults: parsed.searchResults !== undefined ? Boolean(parsed.searchResults) : state.sectionState.searchResults
+    };
+  } catch (_e) {}
+}
+
+function persistCollapseState() {
+  try {
+    localStorage.setItem(COLLAPSE_STATE_KEY, JSON.stringify(state.sectionState));
+  } catch (_e) {}
+}
+
+function applyAddSectionCollapseState() {
+  const mapping = [
+    ['favoritesSection', 'favorites'],
+    ['recentsSection', 'recents'],
+    ['searchResultsSection', 'searchResults']
+  ];
+  mapping.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.open = Boolean(state.sectionState[key]);
+  });
+}
+
+function parseAppleHealthBurnedInput(raw) {
+  const text = String(raw || '').trim();
+  if (!text) throw new Error('Paste a number or JSON payload first.');
+  const direct = Number(text);
+  if (Number.isFinite(direct) && direct >= 0) return direct;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (_e) {
+    throw new Error('Invalid format. Use plain kcal number or JSON.');
+  }
+  const candidates = [
+    parsed?.activeEnergyKcal,
+    parsed?.burnedKcal,
+    parsed?.caloriesBurned,
+    parsed?.value,
+    parsed?.kcal
+  ];
+  for (const v of candidates) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  throw new Error('Could not find burned kcal value in JSON.');
+}
+
 function nowTime() {
   return new Date().toTimeString().slice(0, 5);
 }
@@ -852,7 +917,7 @@ async function loadAndRender() {
   renderNutritionPersonPicker(state.persons, state.selectedPersonId);
   setNutritionDefaultDate(state.selectedDate);
   renderSettingsPersons(state.persons);
-  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage, lastSyncAt: state.lastSyncAt });
   const cloudSyncMessageEl = document.getElementById('cloudSyncMessage');
   if (cloudSyncMessageEl) cloudSyncMessageEl.textContent = state.cloudSyncMessage || '';
   document.querySelectorAll('#genericCategoryFilters button[data-category]').forEach((btn) => {
@@ -880,6 +945,9 @@ async function loadAndRender() {
     const waterMl = await getWaterTotalForPersonDate(person.id, state.selectedDate);
     const exerciseMinutes = await getExerciseTotalForPersonDate(person.id, state.selectedDate);
     const fasting = await loadFastingSummary(person.id);
+    const burnedKcal = await getBurnedCaloriesForPersonDate(person.id, state.selectedDate);
+    const burnedInput = document.getElementById('burnedCaloriesInput');
+    if (burnedInput) burnedInput.value = String(Math.round(Number(burnedKcal || 0)));
     renderDashboard(dashboardPerson, state.selectedDate, entriesByPerson[person.id] || [], {
       macroView: state.dashboardMacroView,
       layout: layoutForPerson(person.id),
@@ -892,9 +960,11 @@ async function loadAndRender() {
         exerciseGoalMinutes: Number.isFinite(Number(person.exerciseGoalMin)) ? Number(person.exerciseGoalMin) : 30,
         canLog: Boolean(person.id)
       },
-      fasting
+      fasting,
+      burnedKcal
     });
 
+    applyAddSectionCollapseState();
     setSearchSourceToggle(state.searchSource);
     filterSuggestions(document.getElementById('foodSearchInput').value || '', person.id);
   } else {
@@ -1708,7 +1778,7 @@ async function initAuthBootstrap() {
     console.log('AUTH: signed-out');
   }
 
-  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage, lastSyncAt: state.lastSyncAt });
 
   onAuthStateChange((nextSession) => {
     const nextUser = nextSession?.user || null;
@@ -1722,7 +1792,7 @@ async function initAuthBootstrap() {
     } else {
       console.log('AUTH: signed-out');
     }
-    renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+    renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage, lastSyncAt: state.lastSyncAt });
   });
 }
 
@@ -1735,7 +1805,7 @@ async function handleAuthGoogleSignIn() {
     renderAuthStatus(state.auth, { configured: false, message: state.authMessage });
     return;
   }
-  const { error } = await signInWithGoogle();
+  const { error } = await signInWithGoogle(`${window.location.origin}${window.location.pathname}`);
   if (error) {
     state.authMessage = `Google sign-in failed: ${error.message}`;
   } else {
@@ -1750,7 +1820,7 @@ async function handleAuthEmailSignIn() {
   state.authMessage = '';
   if (!email) {
     state.authMessage = 'Please enter an email address.';
-    renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+    renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage, lastSyncAt: state.lastSyncAt });
     return;
   }
   if (!isSupabaseConfigured()) {
@@ -1777,7 +1847,7 @@ async function handleAuthSignOut() {
   } else {
     state.authMessage = 'Signed out.';
   }
-  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage });
+  renderAuthStatus(state.auth, { configured: isSupabaseConfigured(), message: state.authMessage, lastSyncAt: state.lastSyncAt });
 }
 
 async function maybePullPersonsFromCloudOnSignIn() {
@@ -1802,6 +1872,7 @@ async function maybePullPersonsFromCloudOnSignIn() {
   state.cloudSyncMessage = data.length
     ? `Pulled ${data.length} person(s) from cloud.`
     : 'No cloud persons found.';
+  state.lastSyncAt = Date.now();
   console.log(`CLOUD: pull completed count=${data.length}`);
 }
 
@@ -1822,6 +1893,7 @@ async function handlePullPersonsFromCloud() {
       await upsertPerson(person);
     }
     state.cloudSyncMessage = `Pulled ${data.length} person(s) from cloud.`;
+    state.lastSyncAt = Date.now();
     console.log(`CLOUD: manual pull count=${data.length}`);
   }
   await loadAndRender();
@@ -1850,6 +1922,7 @@ async function handlePushPersonsToCloud() {
   }
 
   state.cloudSyncMessage = `Pushed ${pushed} person(s) to cloud.`;
+  state.lastSyncAt = Date.now();
   console.log(`CLOUD: manual push count=${pushed}`);
   await loadAndRender();
 }
@@ -1900,6 +1973,7 @@ async function handlePullEntriesFromCloud() {
   }
 
   state.cloudSyncMessage = `Pulled entries: imported ${imported}, skipped ${skipped}.`;
+  state.lastSyncAt = Date.now();
   console.log(`CLOUD: pull entries ok imported=${imported} skipped=${skipped}`);
   await loadAndRender();
 }
@@ -1923,8 +1997,25 @@ async function handlePushEntriesToCloud() {
   const endDate = state.selectedDate || new Date().toISOString().slice(0, 10);
   const startDate = isoDateDaysAgo(endDate, 29);
   const localEntries = await getEntriesForPersonDateRange(selectedPersonId, startDate, endDate);
+  const cloudSnapshot = await listCloudEntries(state.auth.userId, { personId: selectedPersonId, startDate, endDate, limit: 1000 });
+  if (cloudSnapshot.error) {
+    state.cloudSyncMessage = `Cloud entries push failed: ${cloudSnapshot.error.message}`;
+    await loadAndRender();
+    return;
+  }
+  const cloudById = new Map((cloudSnapshot.data || []).map((item) => [item.id, item]));
+
   let pushed = 0;
+  let skipped = 0;
   for (const entry of localEntries) {
+    const cloudEntry = cloudById.get(entry.id);
+    const localUpdatedAt = Number(entry?.updatedAt || 0);
+    const cloudUpdatedAt = Number(cloudEntry?.updatedAt || 0);
+    if (cloudEntry && cloudUpdatedAt > localUpdatedAt) {
+      skipped += 1;
+      continue;
+    }
+
     const { error } = await upsertCloudEntry(state.auth.userId, entry);
     if (error) {
       state.cloudSyncMessage = `Cloud entries push failed: ${error.message}`;
@@ -1935,9 +2026,39 @@ async function handlePushEntriesToCloud() {
     pushed += 1;
   }
 
-  state.cloudSyncMessage = `Pushed ${pushed} entries to cloud.`;
+  state.cloudSyncMessage = `Pushed ${pushed} entries to cloud, skipped ${skipped} newer cloud entries.`;
+  state.lastSyncAt = Date.now();
   console.log(`CLOUD: push entries ok count=${pushed}`);
   await loadAndRender();
+}
+
+async function handleSaveBurnedCalories() {
+  const personId = state.selectedPersonId;
+  const date = state.selectedDate;
+  if (!personId || !date) return;
+  const raw = document.getElementById('burnedCaloriesInput')?.value || '0';
+  const kcal = Number(raw);
+  if (!Number.isFinite(kcal) || kcal < 0) {
+    window.alert('Please enter a non-negative burned calorie value.');
+    return;
+  }
+  await upsertBurnedCalories({ personId, date, burnedKcal: kcal });
+  await loadAndRender();
+}
+
+async function handleAppleHealthImport() {
+  const statusEl = document.getElementById('appleHealthImportStatus');
+  if (statusEl) statusEl.textContent = '';
+  try {
+    const raw = document.getElementById('appleHealthImportInput')?.value || '';
+    const kcal = parseAppleHealthBurnedInput(raw);
+    const input = document.getElementById('burnedCaloriesInput');
+    if (input) input.value = String(Math.round(kcal));
+    await handleSaveBurnedCalories();
+    if (statusEl) statusEl.textContent = `Imported ${Math.round(kcal)} kcal burned.`;
+  } catch (error) {
+    if (statusEl) statusEl.textContent = error.message || 'Import failed.';
+  }
 }
 
 async function registerServiceWorker() {
@@ -1998,6 +2119,18 @@ function wireEvents() {
   document.getElementById('datePicker').addEventListener('change', async (e) => {
     state.selectedDate = e.target.value;
     await loadAndRender();
+  });
+
+  document.getElementById('saveBurnedCaloriesBtn')?.addEventListener('click', handleSaveBurnedCalories);
+  document.getElementById('importAppleHealthBtn')?.addEventListener('click', handleAppleHealthImport);
+
+  [['favoritesSection', 'favorites'], ['recentsSection', 'recents'], ['searchResultsSection', 'searchResults']].forEach(([id, key]) => {
+    const details = document.getElementById(id);
+    if (!details) return;
+    details.addEventListener('toggle', () => {
+      state.sectionState[key] = details.open;
+      persistCollapseState();
+    });
   });
 
   document.getElementById('dashboardSummary').addEventListener('click', async (e) => {
@@ -2468,5 +2601,6 @@ await initAuthBootstrap();
 wireEvents();
 fillPersonForm(null);
 renderIosInstallBanner();
+loadCollapseState();
 await ensureSeedDataIfNeeded();
 await loadAndRender();
