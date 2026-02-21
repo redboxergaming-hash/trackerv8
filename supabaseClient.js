@@ -1,24 +1,19 @@
 // Avoid hard static bare-module imports in direct browser usage (no bundler).
 async function loadCreateClient() {
-const candidates = [
-  'https://esm.sh/@supabase/supabase-js@2',   // ✅ works on Netlify/static
-  '@supabase/supabase-js',
-  './node_modules/@supabase/supabase-js/dist/module/index.js',
-  '/node_modules/@supabase/supabase-js/dist/module/index.js'
-];
-  for (const specifier of candidates) {
-    try {
-      const mod = await import(specifier);
-      if (typeof mod?.createClient === 'function') {
-        return mod.createClient;
-      }
-    } catch (_error) {
-      // Try next candidate.
-    }
-  }
+  // Netlify static hosting has no /node_modules, so use an ESM CDN.
+  try {
+    const mod = await import('https://esm.sh/@supabase/supabase-js@2');
+    if (typeof mod?.createClient === 'function') return mod.createClient;
+  } catch (e) {}
+
+  // Fallback CDN
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+    if (typeof mod?.createClient === 'function') return mod.createClient;
+  } catch (e) {}
+
   return null;
 }
-
 const createClient = await loadCreateClient();
 
 // TODO: replace fallback constants with your project values for production.
