@@ -1,5 +1,5 @@
 const DB_NAME = 'macroTrackerDB';
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 
 function promisify(req) {
   return new Promise((resolve, reject) => {
@@ -227,6 +227,7 @@ export function openDb() {
       let waterLogs = ensureStore(db, 'waterLogs', { keyPath: 'id' });
       let exerciseLogs = ensureStore(db, 'exerciseLogs', { keyPath: 'id' });
       let fastingLogs = ensureStore(db, 'fastingLogs', { keyPath: 'id' });
+      let burnedLogs = ensureStore(db, 'burnedLogs', { keyPath: 'id' });
       ensureStore(db, 'meta', { keyPath: 'key' });
 
       if (!persons) persons = tx.objectStore('persons');
@@ -240,6 +241,7 @@ export function openDb() {
       if (!waterLogs) waterLogs = tx.objectStore('waterLogs');
       if (!exerciseLogs) exerciseLogs = tx.objectStore('exerciseLogs');
       if (!fastingLogs) fastingLogs = tx.objectStore('fastingLogs');
+      if (!burnedLogs) burnedLogs = tx.objectStore('burnedLogs');
 
       ensureIndex(entries, 'byPersonDate', ['personId', 'date']);
       ensureIndex(entries, 'byPersonDateTime', ['personId', 'date', 'time']);
@@ -262,6 +264,7 @@ export function openDb() {
       ensureIndex(exerciseLogs, 'byPersonDate', ['personId', 'date']);
       ensureIndex(fastingLogs, 'byPersonStartAt', ['personId', 'startAt']);
       ensureIndex(fastingLogs, 'byPersonDateKey', ['personId', 'dateKey']);
+      ensureIndex(burnedLogs, 'byPersonDate', ['personId', 'date']);
 
       if (oldVersion < 2) {
         const cursorReq = persons.openCursor();
@@ -304,7 +307,7 @@ export function openDb() {
 
 export async function seedSampleData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'meta', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'recipes', 'goalPeriods'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'meta', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'recipes', 'goalPeriods'], 'readwrite');
   tx.objectStore('persons').clear();
   tx.objectStore('entries').clear();
   tx.objectStore('favorites').clear();
@@ -313,6 +316,7 @@ export async function seedSampleData() {
   tx.objectStore('waterLogs').clear();
   tx.objectStore('exerciseLogs').clear();
   tx.objectStore('fastingLogs').clear();
+  tx.objectStore('burnedLogs').clear();
   tx.objectStore('recipes').clear();
   tx.objectStore('goalPeriods').clear();
 
@@ -382,7 +386,7 @@ export async function upsertPerson(person) {
 
 export async function deletePersonCascade(personId) {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'goalPeriods', 'meta'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'goalPeriods', 'meta'], 'readwrite');
   tx.objectStore('persons').delete(personId);
 
   const deleteByIndex = (storeName, indexName, keyRange) => {
@@ -403,6 +407,7 @@ export async function deletePersonCascade(personId) {
   deleteByIndex('waterLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
   deleteByIndex('exerciseLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
   deleteByIndex('fastingLogs', 'byPersonStartAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
+  deleteByIndex('burnedLogs', 'byPersonDate', IDBKeyRange.bound([personId, ''], [personId, '\uffff']));
   deleteByIndex('goalPeriods', 'byPersonUpdatedAt', IDBKeyRange.bound([personId, 0], [personId, Number.MAX_SAFE_INTEGER]));
   tx.objectStore('meta').delete(`dashboardLayout:${personId}`);
 
@@ -712,6 +717,39 @@ export async function getWaterTotalForPersonDate(personId, date) {
 
 export async function getExerciseTotalForPersonDate(personId, date) {
   return getHabitTotal('exerciseLogs', 'minutes', personId, date);
+}
+
+export async function upsertBurnedCalories({ personId, date, burnedKcal }) {
+  if (!date) throw new Error('date is required');
+  await ensurePersonExists(personId);
+  const kcal = Number(burnedKcal);
+  if (!Number.isFinite(kcal) || kcal < 0) throw new Error('burnedKcal must be a non-negative number');
+
+  const db = await openDb();
+  const tx = db.transaction('burnedLogs', 'readwrite');
+  const index = tx.objectStore('burnedLogs').index('byPersonDate');
+  const existing = await promisify(index.get([personId, date]));
+  const row = {
+    id: existing?.id || createId(),
+    personId,
+    date,
+    burnedKcal: Math.round(kcal * 10) / 10,
+    createdAt: existing?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+  tx.objectStore('burnedLogs').put(row);
+  await txDone(tx);
+  return row;
+}
+
+export async function getBurnedCaloriesForPersonDate(personId, date) {
+  if (!personId || !date) return 0;
+  const db = await openDb();
+  const tx = db.transaction('burnedLogs', 'readonly');
+  const index = tx.objectStore('burnedLogs').index('byPersonDate');
+  const row = await promisify(index.get([personId, date]));
+  const value = Number(row?.burnedKcal || 0);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value * 10) / 10 : 0;
 }
 
 function localDateKeyFromTs(timestamp) {
@@ -1134,9 +1172,9 @@ function uniqueById(items, idKey = 'id') {
 
 export async function exportAllData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods'], 'readonly');
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'mealTemplates', 'recipes', 'goalPeriods'], 'readonly');
 
-  const [persons, entries, productsCache, favorites, recents, weightLogs, waterLogs, exerciseLogs, fastingLogs, mealTemplates, recipes, goalPeriods] = await Promise.all([
+  const [persons, entries, productsCache, favorites, recents, weightLogs, waterLogs, exerciseLogs, fastingLogs, burnedLogs, mealTemplates, recipes, goalPeriods] = await Promise.all([
     promisify(tx.objectStore('persons').getAll()),
     promisify(tx.objectStore('entries').getAll()),
     promisify(tx.objectStore('productsCache').getAll()),
@@ -1146,6 +1184,7 @@ export async function exportAllData() {
     promisify(tx.objectStore('waterLogs').getAll()),
     promisify(tx.objectStore('exerciseLogs').getAll()),
     promisify(tx.objectStore('fastingLogs').getAll()),
+    promisify(tx.objectStore('burnedLogs').getAll()),
     promisify(tx.objectStore('mealTemplates').getAll()),
     promisify(tx.objectStore('recipes').getAll()),
     promisify(tx.objectStore('goalPeriods').getAll())
@@ -1163,6 +1202,7 @@ export async function exportAllData() {
     waterLogs,
     exerciseLogs,
     fastingLogs,
+    burnedLogs,
     mealTemplates,
     recipes,
     goalPeriods
@@ -1171,9 +1211,9 @@ export async function exportAllData() {
 
 export async function importAllData(payload) {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'], 'readwrite');
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'], 'readwrite');
 
-  const storesToReset = ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods'];
+  const storesToReset = ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'mealTemplates', 'recipes', 'goalPeriods'];
   storesToReset.forEach((storeName) => tx.objectStore(storeName).clear());
 
   const persons = uniqueById(payload.persons || []);
@@ -1185,6 +1225,7 @@ export async function importAllData(payload) {
   const waterLogs = uniqueById(payload.waterLogs || []);
   const exerciseLogs = uniqueById(payload.exerciseLogs || []);
   const fastingLogs = uniqueById(payload.fastingLogs || []);
+  const burnedLogs = uniqueById(payload.burnedLogs || []);
   const mealTemplates = uniqueById(payload.mealTemplates || []);
   const recipes = uniqueById(payload.recipes || []);
   const goalPeriods = uniqueById(payload.goalPeriods || []);
@@ -1205,6 +1246,7 @@ export async function importAllData(payload) {
   waterLogs.forEach((item) => tx.objectStore('waterLogs').put(item));
   exerciseLogs.forEach((item) => tx.objectStore('exerciseLogs').put(item));
   fastingLogs.forEach((item) => tx.objectStore('fastingLogs').put(item));
+  burnedLogs.forEach((item) => tx.objectStore('burnedLogs').put(item));
   mealTemplates.forEach((item) => tx.objectStore('mealTemplates').put(item));
   recipes.forEach((item) => tx.objectStore('recipes').put(item));
   goalPeriods.forEach((item) => tx.objectStore('goalPeriods').put(item));
@@ -1222,6 +1264,7 @@ export async function importAllData(payload) {
     waterLogs: waterLogs.length,
     exerciseLogs: exerciseLogs.length,
     fastingLogs: fastingLogs.length,
+    burnedLogs: burnedLogs.length,
     mealTemplates: mealTemplates.length,
     recipes: recipes.length,
     goalPeriods: goalPeriods.length
@@ -1230,8 +1273,8 @@ export async function importAllData(payload) {
 
 export async function deleteAllData() {
   const db = await openDb();
-  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'], 'readwrite');
-  ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'].forEach((storeName) => {
+  const tx = db.transaction(['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'], 'readwrite');
+  ['persons', 'entries', 'productsCache', 'favorites', 'recents', 'weightLogs', 'waterLogs', 'exerciseLogs', 'fastingLogs', 'burnedLogs', 'mealTemplates', 'recipes', 'goalPeriods', 'meta'].forEach((storeName) => {
     tx.objectStore(storeName).clear();
   });
   await txDone(tx);

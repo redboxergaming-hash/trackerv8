@@ -169,3 +169,44 @@ npm run smoke:offline
 ```
 
 WebKit remains the primary/authoritative target for iPhone Safari behavior.
+
+## Collapsible sections (Add Entry)
+- In **Manual Add**, Favorites, Recent items, and Search results are now collapsible.
+- Defaults are tuned for less scrolling:
+  - Favorites: collapsed
+  - Recent items: collapsed
+  - Search results: expanded
+- The open/closed state is persisted per-device in browser local storage.
+
+## Daily burned calories (per date, per person)
+- Dashboard now supports **Calories burned** as a day-specific value.
+- Open Dashboard, choose person/date, then set **Burned kcal** and save.
+- Day math now displays:
+  - **Intake** = logged food kcal
+  - **Burned** = activity kcal entered for that day
+  - **Net** = Intake - Burned
+- Stored in IndexedDB as separate day records so existing entries data remains intact.
+
+### Apple Watch / Apple Health pathway (optional)
+- Direct HealthKit/Apple Watch access is not possible from a web PWA.
+- The app provides an optional import helper where users can paste:
+  - plain kcal value (e.g. `620`), or
+  - JSON from a Shortcut/export snippet (e.g. `{ "activeEnergyKcal": 620 }`).
+- If parsing fails, the app shows a friendly validation message and keeps manual entry available.
+
+## Supabase / Google sync configuration (Netlify)
+Set these values in Netlify and expose them through `window.__APP_CONFIG__`:
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+
+### Redirect URL expectations
+- OAuth redirect should point back to your deployed app URL (same origin/path as the PWA).
+- In Supabase Auth provider settings, ensure Google redirect URIs include your Netlify domain.
+
+### Sync troubleshooting checklist
+- If account area says not configured, verify `SUPABASE_URL` and `SUPABASE_ANON_KEY` are present.
+- If Google sign-in opens but does not return signed-in state:
+  - check allowed redirect URIs in Supabase + Google provider console,
+  - verify final URL matches your deployed route.
+- If sync fails while offline, local mode remains available; retry push/pull when online.
+- Entries sync uses timestamp-based last-write-wins behavior during push/pull to avoid silent data loss.
