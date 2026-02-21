@@ -1,11 +1,11 @@
 // Avoid hard static bare-module imports in direct browser usage (no bundler).
 async function loadCreateClient() {
-  const candidates = [
-    '@supabase/supabase-js',
-    './node_modules/@supabase/supabase-js/dist/module/index.js',
-    '/node_modules/@supabase/supabase-js/dist/module/index.js'
-  ];
-
+const candidates = [
+  'https://esm.sh/@supabase/supabase-js@2',   // ✅ works on Netlify/static
+  '@supabase/supabase-js',
+  './node_modules/@supabase/supabase-js/dist/module/index.js',
+  '/node_modules/@supabase/supabase-js/dist/module/index.js'
+];
   for (const specifier of candidates) {
     try {
       const mod = await import(specifier);
