@@ -560,8 +560,43 @@ export async function getEntriesForPersonDateRange(personId, startDate, endDate)
   return rows.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
 }
 
-export async function upsertEntryFromCloud(entry) {
-  return addEntry(entry, { skipHook: true });
+export async function upsertEntryFromCloud(entry = {}) {
+  // Normalize fields so dashboard filters & sums work reliably
+  const e = { ...entry };
+
+  // IDs & basic routing keys
+  e.id = String(e.id || '');
+  e.personId = String(e.personId ?? e.person_id ?? '');
+
+  // Date/time normalization (dashboard usually expects YYYY-MM-DD and HH:MM)
+  if (e.date) e.date = String(e.date).slice(0, 10);
+  if (e.time) e.time = String(e.time).slice(0, 5);
+
+  // UpdatedAt normalization
+  if (e.updatedAt == null && e.updated_at) {
+    e.updatedAt = new Date(e.updated_at).getTime();
+  }
+  if (typeof e.updatedAt === 'string') e.updatedAt = Number(e.updatedAt) || Date.now();
+
+  // Calories normalization (common variants)
+  if (e.kcal == null) {
+    if (e.calories != null) e.kcal = Number(e.calories);
+    else if (e.energyKcal != null) e.kcal = Number(e.energyKcal);
+    else if (e.energy != null) e.kcal = Number(e.energy);
+  }
+
+  // Macro normalization (common variants)
+  if (e.p == null && e.protein != null) e.p = Number(e.protein);
+  if (e.c == null && e.carbs != null) e.c = Number(e.carbs);
+  if (e.f == null && e.fat != null) e.f = Number(e.fat);
+
+  // Make sure numbers are numbers (avoid NaN poisoning dashboard sums)
+  if (e.kcal != null) e.kcal = Number(e.kcal) || 0;
+  if (e.p != null) e.p = Number(e.p) || 0;
+  if (e.c != null) e.c = Number(e.c) || 0;
+  if (e.f != null) e.f = Number(e.f) || 0;
+
+  return addEntry(e, { skipHook: true });
 }
 
 function normalizeGoalValue(value) {
